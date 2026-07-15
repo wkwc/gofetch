@@ -154,6 +154,11 @@ type Downloader struct {
 	expectedSHA256 string
 	resumePath     string
 	startTime      time.Time
+
+	retryMu    sync.Mutex
+	retryCount map[Task]int
+
+	lastResumeSave atomic.Int64 // unix nano; throttle resume writes
 }
 
 // HashType identifies the hash algorithm for integrity verification.
@@ -282,22 +287,31 @@ func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, erro
 		}(u)
 	}
 	var best *result
+	results := make([]result, 0, len(d.Mirrors))
 	for i := 0; i < len(d.Mirrors); i++ {
 		r := <-ch
+		results = append(results, r)
 		if r.err == nil && r.mirror.Healthy {
 			if best == nil || r.mirror.Latency < best.mirror.Latency {
-				best = &r
+				best = &results[len(results)-1]
 			}
 		}
 	}
 	if best == nil {
 		return nil, probeInfo{}, fmt.Errorf("all mirrors failed")
 	}
-	// Validate ETag consistency across healthy mirrors (if available)
-	if best.mirror.ETag != "" {
-		for i := 0; i < len(d.Mirrors); i++ {
-			// We need to re-probe to get ETags, but we already have them in results.
-			// For now, we only validate the best mirror's ETag exists.
+	// Validate ETag consistency: all healthy mirrors must agree on ETag,
+	// or at least not disagree. If any two healthy mirrors have different
+	// non-empty ETags, the mirrors serve different files — refuse.
+	var etag string
+	for _, r := range results {
+		if r.err != nil || !r.mirror.Healthy || r.mirror.ETag == "" {
+			continue
+		}
+		if etag == "" {
+			etag = r.mirror.ETag
+		} else if etag != r.mirror.ETag {
+			return nil, probeInfo{}, fmt.Errorf("mirrors serve different files: ETag mismatch (%s vs %s)", etag, r.mirror.ETag)
 		}
 	}
 	return best.mirror, best.info, nil
@@ -423,10 +437,12 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 
 	var workers sync.WaitGroup
 	workers.Add(d.WorkersN)
+	saveC := make(chan struct{}, d.WorkersN)
+
 	for _, ws := range states {
 		go func(ws *workerState) {
 			defer workers.Done()
-			d.workerLoop(ctx, ws, queue, progress, f)
+			d.workerLoop(ctx, ws, queue, progress, f, saveC)
 		}(ws)
 	}
 
@@ -438,7 +454,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		d.monitor(monitorCtx, states, queue)
 	}()
 
-	// Periodic resume state save
+	// saveC (defined above) is used by workers to signal task completion
+
+	// Fallback periodic resume state save every 5s
 	resumeTicker := time.NewTicker(5 * time.Second)
 	defer resumeTicker.Stop()
 
@@ -447,6 +465,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		workers.Wait()
 		stopMonitor()
 		monitor.Wait()
+		close(saveC) // drain pending saves
 		close(done)
 	}()
 
@@ -461,10 +480,18 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 					return err
 				}
 			}
+			// Final save before finalize
+			_ = d.SaveResumeState(collectCompleted(states))
 			return d.finalize(ctx, f, progress)
+		case <-saveC:
+			if d.maybeSaveResume(states, time.Second) {
+				// saved; drain any queued save signals
+				for len(saveC) > 0 {
+					<-saveC
+				}
+			}
 		case <-resumeTicker.C:
-			completed := collectCompleted(states)
-			_ = d.SaveResumeState(completed)
+			_ = d.SaveResumeState(collectCompleted(states))
 		case <-time.After(250 * time.Millisecond):
 			d.printProgress(progress, false)
 		}
@@ -539,6 +566,24 @@ func subtractRangesFromList(ranges []Task, completed []Task) []Task {
 	return out
 }
 
+// maybeSaveResume saves the resume state if at least minInterval has passed
+// since the last save. Returns true if it actually wrote.
+func (d *Downloader) maybeSaveResume(states []*workerState, minInterval time.Duration) bool {
+	last := d.lastResumeSave.Load()
+	if last != 0 {
+		elapsed := time.Since(time.Unix(0, last))
+		if elapsed < minInterval {
+			return false
+		}
+	}
+	now := time.Now().UnixNano()
+	if d.SaveResumeState(collectCompleted(states)) == nil {
+		d.lastResumeSave.Store(now)
+		return true
+	}
+	return false
+}
+
 // collectCompleted gathers all finished ranges from worker states.
 func collectCompleted(states []*workerState) []Task {
 	var completed []Task
@@ -584,11 +629,12 @@ func splitRangeFine(lo, hi int64, workersN int, maxChunkSize int64, completed []
 
 // workerState is the live state of one worker.
 type workerState struct {
-	curTask   atomic.Pointer[Task]
-	bytesDone atomic.Int64
-	startedAt atomic.Int64
-	cancelFn  atomic.Pointer[context.CancelFunc]
-	errVal    atomic.Pointer[error]
+	curTask    atomic.Pointer[Task]
+	bytesDone  atomic.Int64
+	startedAt  atomic.Int64
+	cancelFn   atomic.Pointer[context.CancelFunc]
+	stealFlag  atomic.Bool // set true when monitor steals this worker; tells workerLoop not to re-push (the monitor already did)
+	errVal     atomic.Pointer[error]
 }
 
 func newWorkerState() *workerState { return &workerState{} }
@@ -618,8 +664,15 @@ type progress struct {
 func newProgress(total int64) *progress { return &progress{total: total} }
 
 func (p *progress) add(n int64) {
+	// Cap at total to prevent overshoot when stolen tasks re-download
+	// bytes already counted by a previous worker.
 	p.mu.Lock()
-	p.done += n
+	if p.done+n > p.total {
+		n = p.total - p.done
+	}
+	if n > 0 {
+		p.done += n
+	}
 	p.mu.Unlock()
 }
 
@@ -630,7 +683,7 @@ func (p *progress) snapshot() (int64, int64) {
 }
 
 // workerLoop spins a worker: pop a task, run it, repeat until queue empty.
-func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, prog *progress, f *os.File) {
+func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, prog *progress, f *os.File, saveC chan<- struct{}) {
 	for {
 		if err := ctx.Err(); err != nil {
 			ws.setErr(err)
@@ -642,20 +695,47 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 		}
 		err := d.runTask(ctx, ws, task, prog, f)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			// Task was stolen; re-queue with backoff to avoid hammering the mirror
-			backoff := time.Duration(50*time.Millisecond + rand.N(20*time.Millisecond))
+			wasStolen := ws.stealFlag.Swap(false)
+			if wasStolen {
+				// Monitor already pushed the unfinished portion; don't re-push.
+				continue
+			}
+			// Task was cancelled (not by monitor steal). Re-push the unfinished
+			// portion only — bytes already downloaded must not be re-counted.
+			remaining := Task{Start: task.Start + ws.bytesDone.Load(), End: task.End}
+			if remaining.Start >= remaining.End {
+				continue
+			}
+			d.retryMu.Lock()
+			if d.retryCount == nil {
+				d.retryCount = make(map[Task]int)
+			}
+			n := d.retryCount[remaining]
+			if n >= maxTaskRetries {
+				d.retryMu.Unlock()
+				ws.setErr(fmt.Errorf("task %d-%d retried %d times; abandoning", remaining.Start, remaining.End, n))
+				return
+			}
+			d.retryCount[remaining] = n + 1
+			d.retryMu.Unlock()
+			backoff := time.Duration(50*time.Millisecond+rand.N(20*time.Millisecond)) * time.Duration(n+1)
 			select {
 			case <-ctx.Done():
 				ws.setErr(ctx.Err())
 				return
 			case <-time.After(backoff):
 			}
-			queue.Push(task)
+			queue.Push(remaining)
 			continue
 		}
 		if err != nil {
 			ws.setErr(err)
 			return
+		}
+		// Signal that a task completed — main loop may save resume state
+		select {
+		case saveC <- struct{}{}:
+		default:
 		}
 		if queue.Len() == 0 {
 			return
@@ -669,6 +749,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 	if ws != nil {
 		ws.curTask.Store(&taskRef)
 		ws.bytesDone.Store(0)
+		ws.stealFlag.Store(false)
 		ws.startedAt.Store(time.Now().UnixNano())
 	}
 
@@ -768,6 +849,7 @@ const (
 	stealSlowBytes    = 1 << 20
 	stealGracePeriod  = 1500 * time.Millisecond
 	stealMinBytesDone = 0
+	maxTaskRetries    = 5
 )
 
 func (d *Downloader) monitor(ctx context.Context, states []*workerState, queue *Queue) {
@@ -785,6 +867,7 @@ func (d *Downloader) monitor(ctx context.Context, states []*workerState, queue *
 			if !yes {
 				continue
 			}
+			ws.stealFlag.Store(true)
 			cancelFn()
 			queue.Push(leftover)
 		}
@@ -869,7 +952,7 @@ func (d *Downloader) printProgress(p *progress, final bool) {
 		}
 	}
 	if final {
-		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s/%d\n", bar, pct*100, humanBytes(done), total)
+		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s/%d\033[K\n", bar, pct*100, humanBytes(done), total)
 	} else {
 		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s/%d   ", bar, pct*100, humanBytes(done), total)
 	}

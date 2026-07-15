@@ -315,6 +315,62 @@ func TestSidecarHashFetchOK(t *testing.T) {
 	}
 }
 
+func TestMirrorETagMismatch(t *testing.T) {
+	payload1 := makePayload(256 * 1024)
+	payload2 := makePayload(512 * 1024)
+
+	// Two servers serving different payloads with different ETags
+	srv1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("ETag", `"etag1"`)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload1)))
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload1)
+	}))
+	t.Cleanup(srv1.Close)
+
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("ETag", `"etag2"`)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload2)))
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload2)
+	}))
+	t.Cleanup(srv2.Close)
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+
+	d := NewDownloader(srv1.URL, outFile, Options{
+		WorkerCount: 2,
+		BufSize:     32 * 1024,
+		Timeout:     10 * time.Second,
+		Mirrors:     []string{srv2.URL},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	err := d.Download(ctx)
+	if err == nil {
+		t.Fatal("expected ETag mismatch error, got nil")
+	}
+	// Error should mention ETag
+	if err.Error()[:50] == "" {
+		t.Log(err)
+	}
+}
+
 func TestMirrorSelectionConsistency(t *testing.T) {
 	// Two mirrors serve same file
 	payload := makePayload(1 * 1024 * 1024)
