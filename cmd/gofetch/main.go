@@ -1,5 +1,6 @@
 // Command gofetch downloads a single URL (or mirror list) to disk using
-// concurrent HTTP range requests, adaptive work-stealing, and QUIC transport.
+// concurrent HTTP range requests, adaptive work-stealing, multi-mirror
+// failover, resume capability, and integrity verification.
 package main
 
 import (
@@ -18,21 +19,19 @@ import (
 )
 
 func main() {
-	exit := run()
-	os.Exit(exit)
+	os.Exit(run())
 }
 
 func run() int {
 	var (
-		workers    = flag.Int("w", 4, "number of concurrent workers")
-		bufSize    = flag.Int("buf", 64*1024, "per-worker buffer size in bytes")
-		timeout    = flag.Duration("timeout", 30*time.Second, "per-request HTTP timeout")
-		outPath    = flag.String("o", "", "output file path (default: basename of URL)")
-		quiet      = flag.Bool("q", false, "suppress progress output")
-		mirrors    = flag.String("mirrors", "", "comma-separated list of mirror URLs")
-		hashFlag   = flag.String("hash", "", "expected SHA256 hash (hex) or 'auto' to fetch .sha256 sidecar")
-		resume     = flag.Bool("resume", true, "enable resume from .gofetch.json state file")
-		preferQUIC = flag.Bool("quic", true, "prefer QUIC/HTTP3 transport when available")
+		workers  = flag.Int("w", 4, "number of concurrent workers")
+		bufSize  = flag.Int("buf", 64*1024, "per-worker buffer size in bytes")
+		timeout  = flag.Duration("timeout", 30*time.Second, "per-request HTTP timeout")
+		outPath  = flag.String("o", "", "output file path (default: basename of URL)")
+		quiet    = flag.Bool("q", false, "suppress progress output")
+		mirrors  = flag.String("mirrors", "", "comma-separated list of mirror URLs")
+		hashFlag = flag.String("hash", "", "expected SHA256 hash (hex) or 'auto' to fetch .sha256 sidecar")
+		resume   = flag.Bool("resume", true, "enable resume from .gofetch.resume state file")
 	)
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: gofetch [options] <url>")
@@ -59,7 +58,7 @@ func run() int {
 	if *mirrors != "" {
 		for _, m := range strings.Split(*mirrors, ",") {
 			m = strings.TrimSpace(m)
-			if m != "" {
+			if m != "" && m != rawURL {
 				mirrorList = append(mirrorList, m)
 			}
 		}
@@ -91,7 +90,6 @@ func run() int {
 		BufSize:     *bufSize,
 		Timeout:     *timeout,
 		Mirrors:     mirrorList,
-		PreferQUIC:  *preferQUIC,
 		Resume:      *resume,
 		VerifyConfig: fetch.VerifyConfig{
 			HashType:   hashType,
