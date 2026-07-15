@@ -1,0 +1,183 @@
+package fetch
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math/rand/v2"
+	"net/http"
+	"os"
+	"sync/atomic"
+	"time"
+)
+
+// workerState is the live state of one worker goroutine.
+// All non-err fields are atomic for lock-free reads from the monitor.
+type workerState struct {
+	curTask   atomic.Pointer[Task]
+	bytesDone atomic.Int64
+	startedAt atomic.Int64 // unix nano
+	cancelFn  atomic.Pointer[context.CancelFunc]
+	stealFlag atomic.Bool // set true when monitor preempts; tells workerLoop not to re-push
+	errVal    atomic.Pointer[error]
+}
+
+func newWorkerState() *workerState { return &workerState{} }
+
+// setErr records the first non-nil error.
+func (ws *workerState) setErr(err error) {
+	if err == nil {
+		return
+	}
+	e := err
+	ws.errVal.CompareAndSwap(nil, &e)
+}
+
+// err returns the recorded error (if any).
+func (ws *workerState) err() (error, bool) {
+	p := ws.errVal.Load()
+	if p == nil {
+		return nil, false
+	}
+	return *p, true
+}
+
+// reset initializes state for a fresh task run.
+func (ws *workerState) reset(task Task) {
+	taskRef := task
+	ws.curTask.Store(&taskRef)
+	ws.bytesDone.Store(0)
+	ws.stealFlag.Store(false)
+	ws.startedAt.Store(time.Now().UnixNano())
+}
+
+// workerLoop pops tasks from queue, runs them, signals saveC on success.
+// On context cancellation it re-pushes the unfinished portion of the task
+// (skipping when the cancel came from monitor's steal plan).
+func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, prog *progress, f *os.File, saveC chan<- struct{}) {
+	for {
+		if err := ctx.Err(); err != nil {
+			ws.setErr(err)
+			return
+		}
+		task, ok := queue.Pop()
+		if !ok {
+			return
+		}
+		err := d.runTask(ctx, ws, task, prog, f)
+		switch {
+		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+			if ws.stealFlag.Swap(false) {
+				continue // monitor already pushed the stolen portion
+			}
+			d.requeueUnfinished(ctx, ws, task, queue)
+		case err != nil:
+			ws.setErr(err)
+			return
+		default:
+			select {
+			case saveC <- struct{}{}:
+			default:
+			}
+			if queue.Len() == 0 {
+				return
+			}
+		}
+	}
+}
+
+// requeueUnfinished pushes the unfinished remainder of an aborted task
+// back to the queue with retry-cap + exponential backoff.
+func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, task Task, queue *Queue) {
+	remaining := Task{Start: task.Start + ws.bytesDone.Load(), End: task.End}
+	if remaining.Start >= remaining.End {
+		return
+	}
+	d.retryMu.Lock()
+	if d.retryCount == nil {
+		d.retryCount = make(map[Task]int)
+	}
+	n := d.retryCount[remaining]
+	if n >= maxTaskRetries {
+		d.retryMu.Unlock()
+		ws.setErr(fmt.Errorf("task %d-%d retried %d times", remaining.Start, remaining.End, n))
+		return
+	}
+	d.retryCount[remaining] = n + 1
+	d.retryMu.Unlock()
+	backoff := time.Duration(50+rand.N(20)) * time.Millisecond * time.Duration(n+1)
+	select {
+	case <-ctx.Done():
+		ws.setErr(ctx.Err())
+	case <-time.After(backoff):
+		queue.Push(remaining)
+	}
+}
+
+// runTask performs the HTTP range request for one task, writing bytes
+// to f. ws may be nil for the single-stream fallback.
+func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, prog *progress, f *os.File) error {
+	if ws != nil {
+		ws.reset(task)
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if ws != nil {
+		cf := context.CancelFunc(cancel)
+		ws.cancelFn.Store(&cf)
+		defer ws.cancelFn.Store(nil)
+	}
+
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, d.URL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", task.Start, task.End))
+	req.Header.Set("User-Agent", d.UserAgent)
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("range %d-%d: status %d", task.Start, task.End, resp.StatusCode)
+	}
+
+	buf := acquireBuf(d.BufSize)
+	defer releaseBuf(buf)
+	cursor, end := task.Start, task.End
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if remaining := end - cursor + 1; int64(n) > remaining {
+				n = int(remaining)
+				if n <= 0 {
+					return nil
+				}
+			}
+			written, err := f.WriteAt(buf[:n], cursor)
+			if err != nil {
+				return err
+			}
+			if written != n {
+				return fmt.Errorf("short write: wanted %d, wrote %d", n, written)
+			}
+			cursor += int64(n)
+			prog.add(int64(n))
+			if ws != nil {
+				ws.bytesDone.Store(cursor - task.Start)
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return rerr
+		}
+		if cursor > end {
+			return nil
+		}
+	}
+}
