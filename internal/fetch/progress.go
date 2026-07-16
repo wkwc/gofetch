@@ -64,9 +64,9 @@ func (d *Downloader) printProgress(p *progress, final bool) {
 		}
 	}
 	if final {
-		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s/%d\033[K\n", bar, pct*100, humanBytes(done), total)
+		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s\033[K\n", bar, pct*100, humanBytes(done), humanBytes(total))
 	} else {
-		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s/%d   ", bar, pct*100, humanBytes(done), total)
+		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s   ", bar, pct*100, humanBytes(done), humanBytes(total))
 	}
 }
 

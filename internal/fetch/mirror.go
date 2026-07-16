@@ -110,7 +110,10 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 	case resp.StatusCode == http.StatusOK:
 		ar := resp.Header.Get("Accept-Ranges")
 		return probeInfo{supportsRanges: ar != "" && ar != "none", total: resp.ContentLength, etag: resp.Header.Get("ETag")}, true, nil
-	case resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusBadRequest:
+	case resp.StatusCode == http.StatusMethodNotAllowed,
+		resp.StatusCode == http.StatusBadRequest,
+		resp.StatusCode == http.StatusNotImplemented:
+		// Server doesn't support HEAD; fall back to a 1-byte range GET.
 		return probeInfo{}, false, nil
 	default:
 		return probeInfo{}, false, fmt.Errorf("HEAD %s: status %d", rawURL, resp.StatusCode)

@@ -89,6 +89,11 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for {
 		select {
 		case <-ctx.Done():
+			// Save final resume state before exiting, so the next run can
+			// pick up where we left off. Then wait for workers + drain
+			// goroutine so we never close f underneath an in-flight WriteAt.
+			d.maybeSaveResume(states)
+			<-done
 			return ctx.Err()
 		case <-done:
 			for _, ws := range states {
