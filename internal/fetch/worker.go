@@ -143,9 +143,11 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 				return
 			}
 		default:
-			select {
-			case saveC <- struct{}{}:
-			default:
+			if saveC != nil {
+				select {
+				case saveC <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}
@@ -206,6 +208,10 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 
 	d.vlog("task %d-%d started", task.Start, task.End)
 
+	// Pre-compute Range header once per task (avoid 2 strconv.FormatInt
+	// allocations per HTTP attempt).
+	rangeHeader := "bytes=" + strconv.FormatInt(task.Start, 10) + "-" + strconv.FormatInt(task.End, 10)
+
 	// Bound the inner retry loop so a persistently-broken server cannot
 	// hold a worker forever.
 	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
@@ -213,7 +219,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Range", "bytes="+strconv.FormatInt(task.Start, 10)+"-"+strconv.FormatInt(task.End, 10))
+		req.Header.Set("Range", rangeHeader)
 		req.Header.Set("User-Agent", userAgent)
 		// Compression is disabled in AutoConfig for binary downloads. Kept for
 		// completeness in case user enables it manually (not currently exposed).
@@ -265,6 +271,8 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 		buf := acquireBuf(d.bufSize)
 		defer releaseBuf(buf)
 		cursor, end := task.Start, task.End
+		// Hoist manifest check out of the per-Read hot loop.
+		manifest := d.manifest
 		for {
 			n, rerr := resp.Body.Read(buf)
 			if n > 0 {
@@ -283,8 +291,8 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 					ws.bytesDone.Store(cursor - task.Start)
 				}
 				// Verify chunk against manifest if available (per-chunk integrity).
-				if d.manifest != nil {
-					if err := d.manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
+				if manifest != nil {
+					if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
 						return err
 					}
 				}

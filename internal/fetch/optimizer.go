@@ -25,18 +25,8 @@ type AutoConfig struct {
 // fileSizeHint may be 0 (unknown).
 func AutoConfigure(fileSizeHint int64) AutoConfig {
 	cores := runtime.NumCPU()
-	workers := cores * 2
-	if workers < 4 {
-		workers = 4
-	}
-	if workers > 16 {
-		workers = 16
-	}
-
-	bufSize := 64 * 1024
-	if fileSizeHint > 100<<20 {
-		bufSize = 256 * 1024
-	}
+	workers := scaleWorkers(fileSizeHint, cores)
+	bufSize := scaleBufSize(fileSizeHint)
 
 	return AutoConfig{
 		Workers:   workers,
@@ -46,6 +36,61 @@ func AutoConfigure(fileSizeHint int64) AutoConfig {
 		RetryCap:  30 * time.Second,
 		Timeout:   10 * time.Second,
 		Compress:  false, // binary downloads — gzip offers nothing useful and corrupts Range responses
+	}
+}
+
+// scaleWorkers scales worker count based on file size hint and CPU count.
+// Small files don't benefit from many workers (overhead > speedup).
+// Large files benefit from high concurrency, capped at 32 to keep the
+// transport's MaxIdleConnsPerHost consistent.
+func scaleWorkers(totalSize int64, cores int) int {
+	if totalSize <= 0 {
+		// Unknown: assume "reasonable size", half the old heuristic.
+		w := cores + 2
+		if w < 4 {
+			w = 4
+		}
+		if w > 12 {
+			w = 12
+		}
+		return w
+	}
+	// 1 worker per chunk is wasteful. Aim for ~10-100 chunks per worker.
+	// 1 MiB chunks: totalSize/1MiB = chunk count.
+	chunkCount := int(totalSize / (1 << 20))
+	if chunkCount <= 0 {
+		chunkCount = 1
+	}
+	w := chunkCount / 8
+	if w < 4 {
+		return 4
+	}
+	if w > 32 {
+		return 32
+	}
+	// Round up to a sensible CPU-aligned value
+	switch {
+	case w <= cores:
+		return w
+	case w <= cores*2:
+		return cores * 2
+	default:
+		return min(w, 32)
+	}
+}
+
+// scaleBufSize picks a buffer size per range request, sized to amortize
+// syscall overhead without wasting memory on tiny files.
+func scaleBufSize(totalSize int64) int {
+	switch {
+	case totalSize <= 0:
+		return 64 * 1024
+	case totalSize < 1<<20: // < 1 MiB: keep small
+		return 16 * 1024
+	case totalSize < 100<<20: // 1 MiB..100 MiB: default
+		return 64 * 1024
+	default: // >= 100 MiB: bigger buffers
+		return 256 * 1024
 	}
 }
 
@@ -64,6 +109,12 @@ func (ac *AutoConfig) Backoff(n int) time.Duration {
 // newAutoTransport builds an http.Transport with TCP keepalive and
 // proxy detection from environment.
 func newAutoTransport(ac AutoConfig) *http.Transport {
+	// Match MaxIdleConnsPerHost to the upper bound of Workers so
+	// connection reuse can sustain our peak concurrency.
+	maxIdlePerHost := ac.Workers
+	if maxIdlePerHost < 4 {
+		maxIdlePerHost = 4
+	}
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -71,8 +122,8 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
+		MaxIdleConns:          256,
+		MaxIdleConnsPerHost:   maxIdlePerHost,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: ac.Timeout,
@@ -82,11 +133,22 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 // Retune updates Workers and BufSize based on actual file size.
 // Call after probe when total size is known.
 func (ac *AutoConfig) Retune(totalSize int64) {
-	if totalSize > 100<<20 && ac.BufSize < 256*1024 {
-		ac.BufSize = 256 * 1024
+	if totalSize <= 0 {
+		return
 	}
-	if totalSize < 1<<20 && ac.Workers > 4 {
-		ac.Workers = 4
+	newBuf := scaleBufSize(totalSize)
+	if ac.BufSize != newBuf {
+		ac.BufSize = newBuf
 	}
-	// Note: transport not recreated (keepalive preserved)
+	newWorkers := scaleWorkers(totalSize, runtime.NumCPU())
+	if ac.Workers != newWorkers {
+		ac.Workers = newWorkers
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

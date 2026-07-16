@@ -44,15 +44,45 @@ func TestAutoConfigTimeout(t *testing.T) {
 
 func TestAutoConfigRetune(t *testing.T) {
 	ac := AutoConfigure(0)
-	if ac.Workers != 16 && ac.Workers != 8 { // depends on CPU
-		t.Logf("initial workers = %d", ac.Workers)
-	}
+	t.Logf("initial workers = %d", ac.Workers)
 	ac.Retune(200 << 20) // 200 MB
 	if ac.BufSize != 256*1024 {
 		t.Errorf("Retune(200MB) bufSize = %d, want 256KB", ac.BufSize)
 	}
 	ac.Retune(100) // tiny file
-	if ac.Workers > 4 {
-		t.Errorf("Retune(100B) workers = %d, want <= 4", ac.Workers)
+	if ac.BufSize != 16*1024 {
+		t.Errorf("Retune(100B) bufSize = %d, want 16KB", ac.BufSize)
+	}
+}
+
+func TestScaleWorkers(t *testing.T) {
+	cores := 8
+	if w := scaleWorkers(0, cores); w < 4 || w > 12 {
+		t.Errorf("scaleWorkers(0) = %d, want 4-12", w)
+	}
+	if w := scaleWorkers(100, cores); w != 4 {
+		t.Errorf("scaleWorkers(100B) = %d, want 4", w)
+	}
+	if w := scaleWorkers(64<<20, cores); w < 4 || w > cores*2 {
+		t.Errorf("scaleWorkers(64MiB) = %d, want 4-%d", w, cores*2)
+	}
+}
+
+func TestScaleBufSize(t *testing.T) {
+	cases := []struct {
+		size int64
+		want int
+	}{
+		{0, 64 * 1024},
+		{1 << 10, 16 * 1024},
+		{1 << 20, 64 * 1024},
+		{99 << 20, 64 * 1024},
+		{200 << 20, 256 * 1024},
+	}
+	for _, c := range cases {
+		got := scaleBufSize(c.size)
+		if got != c.want {
+			t.Errorf("scaleBufSize(%d) = %d, want %d", c.size, got, c.want)
+		}
 	}
 }

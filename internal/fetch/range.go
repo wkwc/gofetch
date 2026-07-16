@@ -43,11 +43,14 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for i := range states {
 		states[i] = newWorkerState()
 	}
-	d.workerCount = d.workersN
 
 	var workers sync.WaitGroup
 	workers.Add(d.workersN)
-	saveC := make(chan struct{}, d.workersN)
+	// Only allocate the save channel when resume is enabled.
+	var saveC chan struct{}
+	if d.resumePath != "" {
+		saveC = make(chan struct{}, d.workersN)
+	}
 	for _, ws := range states {
 		go func(ws *workerState) {
 			defer workers.Done()
@@ -63,10 +66,21 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		d.monitor(monitorCtx, states, queue)
 	}()
 
-	resumeTicker := time.NewTicker(5 * time.Second)
-	defer resumeTicker.Stop()
-	progressTicker := time.NewTicker(250 * time.Millisecond)
-	defer progressTicker.Stop()
+	// Always update progress bar so user sees activity, even with -q.
+	var progressC <-chan time.Time
+	if !d.quiet {
+		progressTicker := time.NewTicker(250 * time.Millisecond)
+		defer progressTicker.Stop()
+		progressC = progressTicker.C
+	}
+
+	// Only save resume state periodically when resume is enabled.
+	var resumeC <-chan time.Time
+	if d.resumePath != "" {
+		resumeTicker := time.NewTicker(5 * time.Second)
+		defer resumeTicker.Stop()
+		resumeC = resumeTicker.C
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -87,7 +101,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 				}
 			}
 		}
-		close(saveC)
+		if saveC != nil {
+			close(saveC)
+		}
 		close(done)
 	}()
 
@@ -99,7 +115,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for {
 		select {
 		case <-ctx.Done():
-			d.maybeSaveResume(states)
+			if d.resumePath != "" {
+				d.maybeSaveResume(states)
+			}
 			<-done
 			return ctx.Err()
 		case <-done:
@@ -111,9 +129,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 			return d.finalize(f, prog)
 		case <-saveC:
 			d.maybeSaveResume(states)
-		case <-resumeTicker.C:
+		case <-resumeC:
 			d.maybeSaveResume(states)
-		case <-progressTicker.C:
+		case <-progressC:
 			d.printProgress(prog, false)
 		}
 	}

@@ -10,14 +10,20 @@ import (
 func (d *Downloader) finalize(f *os.File, prog *progress) error {
 	d.printProgress(prog, true)
 
-	if d.quiet {
+	if d.quiet && d.expectedHash == "" {
 		clearResume(d.resumePath)
 		return nil
 	}
 
-	// Ensure all bytes are on disk before verification.
+	// Ensure all bytes are on disk before verification (or before
+	// resumable exit in quiet mode).
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync: %w", err)
+	}
+
+	if d.quiet {
+		clearResume(d.resumePath)
+		return nil
 	}
 
 	elapsed := time.Since(d.startTime)
@@ -32,9 +38,7 @@ func (d *Downloader) finalize(f *os.File, prog *progress) error {
 	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", humanBytes(done))
 	fmt.Fprintf(os.Stderr, "  time:    %s\n", formatDuration(elapsed))
 	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", humanBytes(int64(speed)))
-	if d.workerCount > 0 {
-		fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workerCount)
-	}
+	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workersN)
 
 	if d.manifest != nil {
 		fmt.Fprint(os.Stderr, "  manifest: verifying... ")
@@ -73,7 +77,11 @@ func formatDuration(d time.Duration) string {
 
 // maybeSaveResume writes the resume state if at least 1 second has
 // passed since the last save. Cheap throttle to avoid I/O storms.
+// No-op when resume is disabled.
 func (d *Downloader) maybeSaveResume(states []*workerState) {
+	if d.resumePath == "" {
+		return
+	}
 	last := d.lastResumeSave.Load()
 	if last != 0 && time.Duration(time.Now().UnixNano()-last) < time.Second {
 		return

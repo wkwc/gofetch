@@ -31,7 +31,6 @@ type Downloader struct {
 	resumePath   string
 	manifest     *Manifest
 	startTime    time.Time
-	workerCount  int // actual workers used (for summary)
 
 	lastResumeSave atomic.Int64
 	retryMu        sync.Mutex
@@ -83,6 +82,10 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	return d
 }
 
+// smallFileThreshold is the file size below which parallel range downloads
+// don't help: startup overhead dominates. Use single-stream instead.
+const smallFileThreshold = 64 * 1024
+
 // Download fetches d.url into d.outFile.
 // Returns nil on success, or the first worker error.
 func (d *Downloader) Download(ctx context.Context) error {
@@ -107,7 +110,9 @@ func (d *Downloader) Download(ctx context.Context) error {
 		}
 	}
 
-	if !info.supportsRanges {
+	// Single stream is faster for tiny files. The work-stealing monitor
+	// and worker coordination cost more than parallel speedup.
+	if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
 		return d.singleDownload(ctx, info.total, completed)
 	}
 	return d.rangeDownload(ctx, info.total, completed)
