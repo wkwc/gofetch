@@ -2,6 +2,8 @@ package fetch
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"sort"
 	"time"
@@ -49,7 +51,7 @@ func (d *Downloader) saveResume(completed []Task) error {
 func loadResume(path, url string, totalSize int64) (*ResumeState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
@@ -88,18 +90,17 @@ func dedupTasks(tasks []Task) []Task {
 	sorted := make([]Task, len(tasks))
 	copy(sorted, tasks)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
-
-	merged := make([]Task, 0, len(tasks))
-	merged = append(merged, sorted[0])
+	n := 1
 	for _, t := range sorted[1:] {
-		last := &merged[len(merged)-1]
+		last := &sorted[n-1]
 		if t.Start <= last.End+1 {
 			if t.End > last.End {
 				last.End = t.End
 			}
 		} else {
-			merged = append(merged, t)
+			sorted[n] = t
+			n++
 		}
 	}
-	return merged
+	return sorted[:n]
 }

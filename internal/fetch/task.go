@@ -20,6 +20,15 @@ type Queue struct {
 	count int
 }
 
+// NewQueue returns a Queue with pre-allocated capacity for at least n tasks.
+func NewQueue(n int) *Queue {
+	cap := 8
+	for cap < n {
+		cap *= 2
+	}
+	return &Queue{buf: make([]Task, cap)}
+}
+
 // Push enqueues a task.
 func (q *Queue) Push(t Task) {
 	q.mu.Lock()
@@ -32,9 +41,15 @@ func (q *Queue) Push(t Task) {
 
 // PushMany enqueues all tasks in order.
 func (q *Queue) PushMany(tasks []Task) {
+	if len(tasks) == 0 {
+		return
+	}
 	q.mu.Lock()
-	for _, t := range tasks {
+	needed := q.count + len(tasks)
+	for len(q.buf) < needed {
 		q.grow()
+	}
+	for _, t := range tasks {
 		q.buf[q.tail] = t
 		q.tail = (q.tail + 1) % len(q.buf)
 		q.count++

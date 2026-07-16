@@ -29,7 +29,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for _, gap := range uncompleted(Task{Start: 0, End: total - 1}, completed) {
 		seeds = append(seeds, splitRange(gap.Start, gap.Len(), chunkSize)...)
 	}
-	queue := &Queue{}
+	queue := NewQueue(len(seeds))
 	queue.PushMany(seeds)
 
 	states := make([]*workerState, d.workersN)

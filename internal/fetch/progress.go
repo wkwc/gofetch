@@ -3,38 +3,40 @@ package fetch
 import (
 	"fmt"
 	"os"
-	"sync"
+	"sync/atomic"
 )
 
 // progress tracks total bytes downloaded across all workers.
-// The mutex is needed because add + snapshot is a read-modify-write
-// pair, but the contention rate is one increment per ~64 KiB buffered.
+// Uses atomic CAS for lock-free increments; the cap at total
+// prevents overshoot when stolen tasks re-download bytes already
+// counted by another worker.
 type progress struct {
-	mu    sync.Mutex
 	total int64
-	done  int64
+	done  atomic.Int64
 }
 
 func newProgress(total int64) *progress { return &progress{total: total} }
 
-// add increments done by n, capped at total to prevent overshoot
-// when stolen tasks re-download bytes already counted by another worker.
+// add increments done by n, capped at total to prevent overshoot.
 func (p *progress) add(n int64) {
-	p.mu.Lock()
-	if remaining := p.total - p.done; n > remaining {
-		n = remaining
+	for {
+		cur := p.done.Load()
+		remaining := p.total - cur
+		if n > remaining {
+			n = remaining
+		}
+		if n <= 0 {
+			return
+		}
+		if p.done.CompareAndSwap(cur, cur+n) {
+			return
+		}
 	}
-	if n > 0 {
-		p.done += n
-	}
-	p.mu.Unlock()
 }
 
 // snapshot returns (done, total).
 func (p *progress) snapshot() (int64, int64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.done, p.total
+	return p.done.Load(), p.total
 }
 
 // progressBar is a reusable buffer for the progress bar display.

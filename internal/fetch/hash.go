@@ -8,10 +8,15 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 )
 
 // hashBufSize is the buffer size used for SHA-256 computation.
 const hashBufSize = 256 * 1024 // 256 KiB
+
+var hashBufPool = sync.Pool{
+	New: func() any { b := make([]byte, hashBufSize); return &b },
+}
 
 // fileHexSHA256 returns the hex-encoded SHA-256 of the file at path.
 func fileHexSHA256(path string) (string, error) {
@@ -21,8 +26,9 @@ func fileHexSHA256(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	buf := make([]byte, hashBufSize)
-	if _, err := io.CopyBuffer(h, f, buf); err != nil {
+	bp := hashBufPool.Get().(*[]byte)
+	defer hashBufPool.Put(bp)
+	if _, err := io.CopyBuffer(h, f, *bp); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

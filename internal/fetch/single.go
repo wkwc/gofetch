@@ -40,12 +40,11 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 	for {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
-			written, werr := f.WriteAt(buf[:n], cursor)
-			if werr != nil {
+			if _, werr := f.WriteAt(buf[:n], cursor); werr != nil {
 				return werr
 			}
-			cursor += int64(written)
-			prog.add(int64(written))
+			cursor += int64(n)
+			prog.add(int64(n))
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
