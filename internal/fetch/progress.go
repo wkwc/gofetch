@@ -38,7 +38,7 @@ func (p *progress) snapshot() (int64, int64) {
 }
 
 // printProgress renders the progress bar. Final=true emits a newline
-// and clears any leftover characters via ANSI CSI-K.
+// and clears via ANSI CSI-K.
 func (d *Downloader) printProgress(p *progress, final bool) {
 	done, total := p.snapshot()
 	const w = 24

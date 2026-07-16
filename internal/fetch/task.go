@@ -11,23 +11,34 @@ type Task struct {
 // Len returns the number of bytes in this range.
 func (t Task) Len() int64 { return t.End - t.Start + 1 }
 
-// Queue is a FIFO of Tasks. Zero value is ready.
+// Queue is a FIFO of Tasks backed by a ring buffer.
 type Queue struct {
 	mu    sync.Mutex
-	tasks []Task
+	buf   []Task
+	head  int
+	tail  int
+	count int
 }
 
 // Push enqueues a task.
 func (q *Queue) Push(t Task) {
 	q.mu.Lock()
-	q.tasks = append(q.tasks, t)
+	q.grow()
+	q.buf[q.tail] = t
+	q.tail = (q.tail + 1) % len(q.buf)
+	q.count++
 	q.mu.Unlock()
 }
 
 // PushMany enqueues all tasks in order.
 func (q *Queue) PushMany(tasks []Task) {
 	q.mu.Lock()
-	q.tasks = append(q.tasks, tasks...)
+	for _, t := range tasks {
+		q.grow()
+		q.buf[q.tail] = t
+		q.tail = (q.tail + 1) % len(q.buf)
+		q.count++
+	}
 	q.mu.Unlock()
 }
 
@@ -35,12 +46,12 @@ func (q *Queue) PushMany(tasks []Task) {
 func (q *Queue) Pop() (Task, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.tasks) == 0 {
+	if q.count == 0 {
 		return Task{}, false
 	}
-	t := q.tasks[0]
-	copy(q.tasks, q.tasks[1:])
-	q.tasks = q.tasks[:len(q.tasks)-1]
+	t := q.buf[q.head]
+	q.head = (q.head + 1) % len(q.buf)
+	q.count--
 	return t, true
 }
 
@@ -48,5 +59,28 @@ func (q *Queue) Pop() (Task, bool) {
 func (q *Queue) Len() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return len(q.tasks)
+	return q.count
+}
+
+// grow ensures at least one free slot, doubling capacity if needed.
+func (q *Queue) grow() {
+	if q.count < len(q.buf) {
+		return
+	}
+	n := len(q.buf) * 2
+	if n < 8 {
+		n = 8
+	}
+	newBuf := make([]Task, n)
+	if q.count > 0 {
+		if q.head < q.tail {
+			copy(newBuf, q.buf[q.head:q.tail])
+		} else {
+			c := copy(newBuf, q.buf[q.head:])
+			copy(newBuf[c:], q.buf[:q.tail])
+		}
+	}
+	q.buf = newBuf
+	q.head = 0
+	q.tail = q.count
 }

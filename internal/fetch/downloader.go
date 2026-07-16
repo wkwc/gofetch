@@ -22,18 +22,17 @@ type Downloader struct {
 	BufSize       int
 	Timeout       time.Duration
 	UserAgent     string
-	VerifyConfig  VerifyConfig
 	ResumeEnabled bool
 
 	client       *http.Client
 	totalSize    int64
-	expectedHash string // resolved from VerifyConfig.Expected at Download time
+	expectedHash string // SHA-256 hex; empty = skip verification
 	resumePath   string
 	startTime    time.Time
 
 	retryMu        sync.Mutex
 	retryCount     map[Task]int
-	lastResumeSave atomic.Int64 // unix nano
+	lastResumeSave atomic.Int64
 }
 
 // Options configures NewDownloader.
@@ -42,9 +41,8 @@ type Options struct {
 	BufSize        int
 	Timeout        time.Duration
 	Mirrors        []string
-	ExpectedSHA256 string // convenience: equivalent to VerifyConfig.Expected
+	ExpectedSHA256 string // hex-encoded SHA-256; empty skips verification
 	Resume         bool
-	VerifyConfig   VerifyConfig
 }
 
 // NewDownloader constructs a Downloader with sane defaults.
@@ -66,7 +64,6 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		BufSize:       opt.BufSize,
 		Timeout:       opt.Timeout,
 		UserAgent:     "gofetch/0.1",
-		VerifyConfig:  opt.VerifyConfig,
 		ResumeEnabled: opt.Resume,
 		resumePath:    resumePath(outPath),
 		expectedHash:  opt.ExpectedSHA256,
@@ -74,10 +71,15 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	d.client = &http.Client{
 		Timeout: opt.Timeout,
 		Transport: &http.Transport{
-			MaxIdleConns:        opt.WorkerCount * 2,
-			MaxIdleConnsPerHost: opt.WorkerCount,
+			MaxIdleConnsPerHost: opt.WorkerCount + 1,
 			IdleConnTimeout:     90 * time.Second,
 			ForceAttemptHTTP2:   true,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
 		},
 	}
 	return d
@@ -94,9 +96,6 @@ func (d *Downloader) Download(ctx context.Context) error {
 	}
 	d.URL = mirror.URL
 	d.totalSize = info.total
-	if d.VerifyConfig.Expected != "" {
-		d.expectedHash = d.VerifyConfig.Expected
-	}
 
 	var completed []Task
 	if d.ResumeEnabled {

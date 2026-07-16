@@ -13,11 +13,12 @@ import (
 )
 
 // workerState is the live state of one worker goroutine.
-// All non-err fields are atomic for lock-free reads from the monitor.
+// All fields are atomic for lock-free reads from the monitor.
 type workerState struct {
 	curTask   atomic.Pointer[Task]
 	bytesDone atomic.Int64
-	startedAt atomic.Int64 // unix nano
+	startedAt atomic.Int64  // unix nano
+	taskGen   atomic.Uint64 // incremented each reset; monitor uses to detect stale reads
 	cancelFn  atomic.Pointer[context.CancelFunc]
 	stealFlag atomic.Bool // set true when monitor preempts; tells workerLoop not to re-push
 	errVal    atomic.Pointer[error]
@@ -50,6 +51,7 @@ func (ws *workerState) reset(task Task) {
 	ws.bytesDone.Store(0)
 	ws.stealFlag.Store(false)
 	ws.startedAt.Store(time.Now().UnixNano())
+	ws.taskGen.Add(1)
 }
 
 // workerLoop pops tasks from queue, runs them, signals saveC on success.
@@ -69,7 +71,7 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 		switch {
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			if ws.stealFlag.Swap(false) {
-				continue // monitor already pushed the stolen portion
+				continue
 			}
 			d.requeueUnfinished(ctx, ws, task, queue)
 		case err != nil:
@@ -79,9 +81,6 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 			select {
 			case saveC <- struct{}{}:
 			default:
-			}
-			if queue.Len() == 0 {
-				return
 			}
 		}
 	}
@@ -107,10 +106,12 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 	d.retryCount[remaining] = n + 1
 	d.retryMu.Unlock()
 	backoff := time.Duration(50+rand.N(20)) * time.Millisecond * time.Duration(n+1)
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		ws.setErr(ctx.Err())
-	case <-time.After(backoff):
+	case <-timer.C:
 		queue.Push(remaining)
 	}
 }
@@ -118,15 +119,13 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 // runTask performs the HTTP range request for one task, writing bytes
 // to f. ws may be nil for the single-stream fallback.
 func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, prog *progress, f *os.File) error {
-	if ws != nil {
-		ws.reset(task)
-	}
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if ws != nil {
 		cf := context.CancelFunc(cancel)
 		ws.cancelFn.Store(&cf)
 		defer ws.cancelFn.Store(nil)
+		ws.reset(task)
 	}
 
 	req, err := http.NewRequestWithContext(rctx, http.MethodGet, d.URL, nil)
@@ -140,10 +139,11 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return fmt.Errorf("range %d-%d: status %d", task.Start, task.End, resp.StatusCode)
 	}
+	defer resp.Body.Close()
 
 	buf := acquireBuf(d.BufSize)
 	defer releaseBuf(buf)

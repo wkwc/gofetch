@@ -76,27 +76,21 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	hashType := fetch.HashSHA256
 	var expectedHash string
-	sidecar := false
 	if *hashFlag == "auto" {
-		sidecar = true
+		// TODO: fetch <url>.sha256 and extract hash
+		fmt.Fprintln(os.Stderr, "gofetch: -hash auto not yet implemented; use explicit hex hash")
 	} else if *hashFlag != "" {
 		expectedHash = *hashFlag
 	}
 
 	d := fetch.NewDownloader(rawURL, out, fetch.Options{
-		WorkerCount: *workers,
-		BufSize:     *bufSize,
-		Timeout:     *timeout,
-		Mirrors:     mirrorList,
-		Resume:      *resume,
-		VerifyConfig: fetch.VerifyConfig{
-			HashType:   hashType,
-			Expected:   expectedHash,
-			Sidecar:    sidecar,
-			SidecarURL: rawURL + ".sha256",
-		},
+		WorkerCount:    *workers,
+		BufSize:        *bufSize,
+		Timeout:        *timeout,
+		Mirrors:        mirrorList,
+		Resume:         *resume,
+		ExpectedSHA256: expectedHash,
 	})
 
 	if err := d.Download(ctx); err != nil {

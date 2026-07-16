@@ -12,7 +12,7 @@ func TestAllocateSparse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.bin")
 
-	f, err := allocateSparse(path, 1024*1024)
+	f, err := allocateSparse(path, 1024*1024, false)
 	if err != nil {
 		t.Fatalf("allocateSparse: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestAllocateSparseZero(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.bin")
 
-	f, err := allocateSparse(path, 0)
+	f, err := allocateSparse(path, 0, false)
 	if err != nil {
 		t.Fatalf("allocateSparse(0): %v", err)
 	}

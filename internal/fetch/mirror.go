@@ -25,9 +25,8 @@ type probeInfo struct {
 	etag           string
 }
 
-// selectMirror probes all d.Mirrors in parallel, picks the healthy one
-// with the lowest latency, and validates that healthy mirrors agree on
-// ETag (mismatched mirrors serve different files and are rejected).
+// selectMirror probes all d.Mirrors in parallel, picks the healthiest,
+// and validates ETag agreement across all healthy mirrors.
 func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, error) {
 	type result struct {
 		mirror *Mirror
@@ -38,19 +37,13 @@ func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, erro
 	for _, u := range d.Mirrors {
 		go func(rawURL string) {
 			m := &Mirror{URL: rawURL}
+			start := time.Now()
 			info, err := d.probeURL(ctx, rawURL)
+			m.Latency = time.Since(start)
 			if err == nil && info.total >= 0 {
 				m.Healthy = true
 				m.ETag = info.etag
 				m.TotalSize = info.total
-				// measure latency with a 1-byte range request
-				start := time.Now()
-				req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-				req.Header.Set("Range", "bytes=0-0")
-				if resp, err := d.client.Do(req); err == nil {
-					resp.Body.Close()
-					m.Latency = time.Since(start)
-				}
 			}
 			ch <- result{m, info, err}
 		}(u)
@@ -62,8 +55,7 @@ func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, erro
 
 	var best *Mirror
 	bestInfo := probeInfo{}
-	for i := range results {
-		r := &results[i]
+	for _, r := range results {
 		if r.err != nil || !r.mirror.Healthy {
 			continue
 		}
@@ -76,8 +68,7 @@ func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, erro
 		return nil, probeInfo{}, errors.New("all mirrors failed")
 	}
 	var etag string
-	for i := range results {
-		r := &results[i]
+	for _, r := range results {
 		if r.err != nil || !r.mirror.Healthy || r.mirror.ETag == "" {
 			continue
 		}
@@ -109,7 +100,7 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 	if err != nil {
 		return probeInfo{}, false, err
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusOK:
 		ar := resp.Header.Get("Accept-Ranges")
@@ -132,7 +123,7 @@ func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probe
 	if err != nil {
 		return probeInfo{}, err
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusPartialContent:
 		_, _, total, ok := parseContentRange(resp.Header.Get("Content-Range"))

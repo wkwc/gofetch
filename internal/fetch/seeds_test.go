@@ -2,7 +2,7 @@ package fetch
 
 import "testing"
 
-func TestSeedTasks(t *testing.T) {
+func TestSplitRange(t *testing.T) {
 	check := func(got []Task, want []Task) {
 		t.Helper()
 		if len(got) != len(want) {
@@ -15,30 +15,25 @@ func TestSeedTasks(t *testing.T) {
 		}
 	}
 
-	// 100 bytes, workersN=4, no maxChunk cap → 4 chunks
-	got := seedTasks(0, 100, 4, 0)
+	got := splitRange(0, 100, 25)
 	check(got, []Task{
 		{0, 24}, {25, 49}, {50, 74}, {75, 99},
 	})
 
-	// 10 bytes split into 2-byte chunks (maxChunk)
-	got = seedTasks(0, 10, 4, 2)
+	got = splitRange(0, 10, 2)
 	check(got, []Task{
 		{0, 1}, {2, 3}, {4, 5}, {6, 7}, {8, 9},
 	})
 
-	// single byte
-	got = seedTasks(5, 1, 4, 1024)
+	got = splitRange(5, 1, 1024)
 	check(got, []Task{{5, 5}})
 
-	// zero length
-	got = seedTasks(0, 0, 4, 1024)
+	got = splitRange(0, 0, 1024)
 	if len(got) != 0 {
 		t.Fatalf("zero-length = %v, want empty", got)
 	}
 
-	// offset > 0
-	got = seedTasks(100, 50, 2, 1024)
+	got = splitRange(100, 50, 25)
 	check(got, []Task{{100, 124}, {125, 149}})
 }
 

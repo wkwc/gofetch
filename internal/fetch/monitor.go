@@ -40,8 +40,8 @@ func (d *Downloader) monitor(ctx context.Context, states []*workerState, queue *
 	}
 }
 
-// stealPlan computes what to do if ws is slow. ok=false means it's
-// not a candidate (no task, not slow, or too small to split).
+// stealPlan checks if ws is a candidate for work stealing.
+// ok=false means no steal (idle, too small, not slow enough).
 func (ws *workerState) stealPlan(now time.Time) (Task, context.CancelFunc, bool) {
 	t := ws.curTask.Load()
 	if t == nil {
@@ -56,9 +56,14 @@ func (ws *workerState) stealPlan(now time.Time) (Task, context.CancelFunc, bool)
 	if ws.bytesDone.Load() >= stealSlowBytes {
 		return Task{}, nil, false
 	}
+	gen := ws.taskGen.Load()
 	progressBytes := ws.bytesDone.Load()
 	cf := ws.cancelFn.Load()
 	if cf == nil || progressBytes < 1 {
+		return Task{}, nil, false
+	}
+	// re-check taskGen: if it changed, the worker moved on, so our reads are stale
+	if ws.taskGen.Load() != gen {
 		return Task{}, nil, false
 	}
 	newStart := t.Start + progressBytes

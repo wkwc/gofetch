@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // fileHexSHA256 returns the hex-encoded SHA-256 of the file at path.
@@ -24,22 +25,7 @@ func fileHexSHA256(path string) (string, error) {
 
 // hexEqual compares two hex strings case-insensitively.
 func hexEqual(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if ca >= 'A' && ca <= 'Z' {
-			ca += 32
-		}
-		if cb >= 'A' && cb <= 'Z' {
-			cb += 32
-		}
-		if ca != cb {
-			return false
-		}
-	}
-	return true
+	return len(a) == len(b) && strings.EqualFold(a, b)
 }
 
 // verifyFileHash computes the file's SHA-256 and compares against expected.

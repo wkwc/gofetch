@@ -1,17 +1,16 @@
 package fetch
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"time"
 )
 
-// finalize verifies the file's SHA256 hash if one was configured,
-// prints a final status line, and clears any resume state.
-func (d *Downloader) finalize(_ context.Context, f *os.File, prog *progress) error {
+// finalize prints the final progress, verifies hash if configured,
+// and clears any resume state.
+func (d *Downloader) finalize(f *os.File, prog *progress) error {
+	d.printProgress(prog, true)
 	if d.expectedHash != "" {
-		d.printProgress(prog, true)
 		fmt.Fprint(os.Stderr, "  verifying SHA256... ")
 		if err := f.Sync(); err != nil {
 			return fmt.Errorf("sync: %w", err)
@@ -37,7 +36,7 @@ func (d *Downloader) maybeSaveResume(states []*workerState) {
 	}
 }
 
-// collectCompleted gathers all finished ranges from worker states.
+// collectCompleted gathers all fully-completed, non-stolen ranges.
 func collectCompleted(states []*workerState) []Task {
 	var out []Task
 	for _, ws := range states {
@@ -45,7 +44,12 @@ func collectCompleted(states []*workerState) []Task {
 		if t == nil {
 			continue
 		}
-		if ws.bytesDone.Load() >= t.Len() {
+		done := ws.bytesDone.Load()
+		// re-check that curTask hasn't been reassigned (worker moved on)
+		if ws.curTask.Load() != t {
+			continue
+		}
+		if done >= t.Len() && !ws.stealFlag.Load() {
 			out = append(out, *t)
 		}
 	}
@@ -54,15 +58,28 @@ func collectCompleted(states []*workerState) []Task {
 
 // allocateSparse opens path read/write and truncates it to size,
 // yielding a sparse file when supported by the filesystem.
-func allocateSparse(path string, size int64) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+// If resume is enabled and the file already has the target size,
+// it is opened without truncation to preserve existing bytes.
+func allocateSparse(path string, size int64, resume bool) (*os.File, error) {
+	flags := os.O_RDWR | os.O_CREATE
+	if !resume {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(path, flags, 0o644)
 	if err != nil {
 		return nil, err
 	}
 	if size > 0 {
-		if err := f.Truncate(size); err != nil {
+		info, err := f.Stat()
+		if err != nil {
 			f.Close()
-			return nil, fmt.Errorf("truncate %d: %w", size, err)
+			return nil, err
+		}
+		if info.Size() < size {
+			if err := f.Truncate(size); err != nil {
+				f.Close()
+				return nil, fmt.Errorf("truncate %d: %w", size, err)
+			}
 		}
 	}
 	return f, nil

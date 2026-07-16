@@ -18,13 +18,10 @@ func TestEndToEndWithHashVerify(t *testing.T) {
 	outFile := filepath.Join(dir, "out.bin")
 
 	d := NewDownloader(srv.URL, outFile, Options{
-		WorkerCount: 2,
-		BufSize:     32 * 1024,
-		Timeout:     10 * time.Second,
-		VerifyConfig: VerifyConfig{
-			HashType: HashSHA256,
-			Expected: expected,
-		},
+		WorkerCount:    2,
+		BufSize:        32 * 1024,
+		Timeout:        10 * time.Second,
+		ExpectedSHA256: expected,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -48,11 +45,8 @@ func TestEndToEndWithBadHash(t *testing.T) {
 		WorkerCount: 2,
 		BufSize:     32 * 1024,
 		Timeout:     10 * time.Second,
-		VerifyConfig: VerifyConfig{
-			HashType: HashSHA256,
-			Expected: "deadbeef" + "deadbeef" + "deadbeef" + "deadbeef" +
-				"deadbeef" + "deadbeef" + "deadbeef" + "deadbeef",
-		},
+		ExpectedSHA256: "deadbeefdeadbeefdeadbeefdeadbeef" +
+			"deadbeefdeadbeefdeadbeefdeadbeef",
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

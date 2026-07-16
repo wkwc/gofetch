@@ -5,6 +5,9 @@ import "fmt"
 // humanBytes returns a short IEC-formatted byte count.
 func humanBytes(n int64) string {
 	const k = 1024
+	if n <= 0 {
+		return fmt.Sprintf("%d B", n)
+	}
 	switch {
 	case n < k:
 		return fmt.Sprintf("%d B", n)

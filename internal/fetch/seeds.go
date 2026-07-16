@@ -2,31 +2,16 @@ package fetch
 
 import "sort"
 
-// seedTasks splits [offset..offset+length-1] into tasks of at most
-// maxChunk bytes. With workersN=1 the only intent is to chunk by
-// maxChunk, giving fine resume granularity per chunk.
-// Smaller chunks = finer resume granularity after a crash/restart.
-func seedTasks(offset, length int64, workersN int, maxChunk int64) []Task {
-	if length <= 0 {
+// splitRange splits [offset, offset+length) into tasks of at most
+// chunkSize bytes each.
+func splitRange(offset, length, chunkSize int64) []Task {
+	if length <= 0 || chunkSize <= 0 {
 		return nil
-	}
-	if workersN < 1 {
-		workersN = 1
-	}
-	chunk := length / int64(workersN)
-	if chunk < 1 {
-		chunk = 1
-	}
-	if maxChunk > 0 && chunk > maxChunk {
-		chunk = maxChunk
-	}
-	if chunk < 1 {
-		chunk = 1
 	}
 	end := offset + length
 	var out []Task
 	for cursor := offset; cursor < end; {
-		stop := cursor + chunk
+		stop := cursor + chunkSize
 		if stop > end {
 			stop = end
 		}
