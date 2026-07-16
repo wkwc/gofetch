@@ -59,8 +59,8 @@ func main() {
 		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 		w.WriteHeader(http.StatusPartialContent)
 
-		// Stream in 64KB chunks
-		const chunk = 64 * 1024
+		// Stream in 256KB chunks for balanced throughput
+		const chunk = 256 * 1024
 		for cur := start; cur <= end; cur += chunk {
 			stop := cur + chunk - 1
 			if stop > end {

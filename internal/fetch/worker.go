@@ -303,10 +303,10 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 	return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status", task.Start, task.End, maxHTTPStatusRetries)
 }
 
-// bufPool recycles per-worker read buffers. Allocates at the maximum
-// size class (256 KiB) so all sizes reuse the same pool.
+// bufPool recycles per-worker read buffers. Uses 64 KiB as base size;
+// larger buffers are allocated fresh and not pooled (rare).
 var bufPool = sync.Pool{
-	New: func() any { b := make([]byte, 256*1024); return &b },
+	New: func() any { b := make([]byte, 64*1024); return &b },
 }
 
 // acquireBuf returns a buffer of at least length n, drawing from the pool.
@@ -315,13 +315,14 @@ func acquireBuf(n int) []byte {
 	if cap(*bp) >= n {
 		return (*bp)[:n]
 	}
-	// Should not happen with 256 KiB pool, but fallback.
+	// Pool buffer too small; allocate fresh. Don't return the old one
+	// since it's the wrong size class.
 	return make([]byte, n)
 }
 
-// releaseBuf returns b to the pool.
+// releaseBuf returns b to the pool, dropping oversized buffers.
 func releaseBuf(b []byte) {
-	if cap(b) == 0 {
+	if cap(b) > 1<<20 || cap(b) == 0 {
 		return
 	}
 	bp := b[:cap(b):cap(b)]
