@@ -6,22 +6,69 @@ import (
 	"time"
 )
 
-// finalize prints the final progress, verifies hash if configured,
-// and clears any resume state.
+// finalize prints the download summary, verifies hashes, and clears resume state.
 func (d *Downloader) finalize(f *os.File, prog *progress) error {
 	d.printProgress(prog, true)
-	if d.expectedHash != "" {
-		fmt.Fprint(os.Stderr, "  verifying SHA256... ")
-		if err := f.Sync(); err != nil {
-			return fmt.Errorf("sync: %w", err)
-		}
-		if err := verifyFileHash(d.outFile, d.expectedHash); err != nil {
+
+	if d.quiet {
+		clearResume(d.resumePath)
+		return nil
+	}
+
+	// Ensure all bytes are on disk before verification.
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("sync: %w", err)
+	}
+
+	elapsed := time.Since(d.startTime)
+	done, _ := prog.snapshot()
+
+	speed := float64(0)
+	if elapsed.Seconds() > 0 {
+		speed = float64(done) / elapsed.Seconds()
+	}
+
+	fmt.Fprintf(os.Stderr, "\n  download complete\n")
+	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", humanBytes(done))
+	fmt.Fprintf(os.Stderr, "  time:    %s\n", formatDuration(elapsed))
+	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", humanBytes(int64(speed)))
+	if d.workerCount > 0 {
+		fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workerCount)
+	}
+
+	if d.manifest != nil {
+		fmt.Fprint(os.Stderr, "  manifest: verifying... ")
+		if err := d.manifest.VerifyFull(d.outFile); err != nil {
+			fmt.Fprint(os.Stderr, "FAILED\n")
 			return err
 		}
 		fmt.Fprint(os.Stderr, "OK\n")
 	}
+
+	if d.expectedHash != "" {
+		fmt.Fprintf(os.Stderr, "  hash %s: verifying... ", d.hashAlgo)
+		if err := verifyFileHash(d.outFile, d.hashAlgo, d.expectedHash); err != nil {
+			fmt.Fprint(os.Stderr, "FAILED\n")
+			return err
+		}
+		fmt.Fprint(os.Stderr, "OK\n")
+	}
+
 	clearResume(d.resumePath)
 	return nil
+}
+
+// formatDuration formats a duration in human-readable form.
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) - m*60
+	return fmt.Sprintf("%dm%ds", m, s)
 }
 
 // maybeSaveResume writes the resume state if at least 1 second has
@@ -45,7 +92,6 @@ func collectCompleted(states []*workerState) []Task {
 			continue
 		}
 		done := ws.bytesDone.Load()
-		// re-check that curTask hasn't been reassigned (worker moved on)
 		if ws.curTask.Load() != t {
 			continue
 		}
@@ -56,7 +102,7 @@ func collectCompleted(states []*workerState) []Task {
 	return out
 }
 
-// allocateSparse opens path read/write and truncates it to size,
+// allocateSparse opens path write-only and truncates it to size,
 // yielding a sparse file when supported by the filesystem.
 // If resume is enabled and the file already has the target size,
 // it is opened without truncation to preserve existing bytes.

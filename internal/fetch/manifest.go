@@ -1,0 +1,128 @@
+package fetch
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+)
+
+// ManifestVersion is the current manifest format version.
+const ManifestVersion = 1
+
+// Manifest holds per-chunk hashes for piece-level integrity.
+type Manifest struct {
+	Version int                        `json:"version"`
+	Algo    string                     `json:"algo"`
+	Chunks  []ChunkHash                `json:"chunks"`
+	index   map[int64]map[int64]string // start -> end -> hash (built on load)
+}
+
+// ChunkHash maps a byte range to its expected hash.
+type ChunkHash struct {
+	Start int64  `json:"start"`
+	End   int64  `json:"end"`
+	Hash  string `json:"hash"`
+}
+
+// LoadManifest reads a .gofetch.manifest JSON file.
+func LoadManifest(path string) (*Manifest, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("manifest: %w", err)
+	}
+	if m.Version < 1 || m.Version > ManifestVersion {
+		return nil, fmt.Errorf("manifest: unsupported version %d", m.Version)
+	}
+	if m.Algo == "" {
+		m.Algo = "sha256"
+	}
+	m.buildIndex()
+	return &m, nil
+}
+
+// VerifyChunk checks that data matches the expected hash for [start, end].
+// Returns nil if no matching chunk entry exists (manifest is advisory).
+func (m *Manifest) VerifyChunk(start, end int64, data []byte) error {
+	if m == nil {
+		return nil
+	}
+	if m.index == nil {
+		m.buildIndex()
+	}
+	if endMap, ok := m.index[start]; ok {
+		if expected, ok := endMap[end]; ok {
+			return verifyHash(data, m.Algo, expected)
+		}
+	}
+	return nil
+}
+
+// VerifyFull reads path and verifies every chunk in the manifest.
+func (m *Manifest) VerifyFull(path string) error {
+	if m == nil {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	const bufSize = 256 * 1024
+	buf := make([]byte, bufSize)
+	for _, c := range m.Chunks {
+		size := c.End - c.Start + 1
+		if _, err := f.Seek(c.Start, io.SeekStart); err != nil {
+			return fmt.Errorf("manifest: seek %d: %w", c.Start, err)
+		}
+		h := newHash(m.Algo)
+		remaining := size
+		for remaining > 0 {
+			n := int64(bufSize)
+			if n > remaining {
+				n = remaining
+			}
+			if _, err := io.ReadFull(f, buf[:n]); err != nil {
+				return fmt.Errorf("manifest: read %d-%d: %w", c.Start, c.End, err)
+			}
+			h.Write(buf[:n])
+			remaining -= n
+		}
+		got := hex.EncodeToString(h.Sum(nil))
+		if !hexEqual(got, c.Hash) {
+			return fmt.Errorf("manifest: chunk %d-%d hash mismatch: expected %s, got %s",
+				c.Start, c.End, c.Hash, got)
+		}
+	}
+	return nil
+}
+
+func verifyHash(data []byte, algo, expected string) error {
+	h := newHash(algo)
+	h.Write(data)
+	got := hex.EncodeToString(h.Sum(nil))
+	if !hexEqual(got, expected) {
+		return fmt.Errorf("hash mismatch (%s): expected %s, got %s", algo, expected, got)
+	}
+	return nil
+}
+
+// buildIndex builds the O(1) lookup map for chunks.
+// Called lazily on first VerifyChunk or eagerly from LoadManifest.
+func (m *Manifest) buildIndex() {
+	if m.index != nil {
+		return
+	}
+	m.index = make(map[int64]map[int64]string, len(m.Chunks))
+	for _, c := range m.Chunks {
+		if m.index[c.Start] == nil {
+			m.index[c.Start] = make(map[int64]string)
+		}
+		m.index[c.Start][c.End] = c.Hash
+	}
+}

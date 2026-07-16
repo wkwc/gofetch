@@ -24,6 +24,13 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		prog.add(t.Len())
 	}
 
+	// Try to load manifest
+	manifestPath := d.outFile + ".gofetch.manifest"
+	if m, err := LoadManifest(manifestPath); err == nil {
+		d.manifest = m
+		d.vlog("loaded manifest with %d chunks", len(m.Chunks))
+	}
+
 	const chunkSize = 1 << 20 // 1 MiB
 	seeds := make([]Task, 0, (total+chunkSize-1)/chunkSize)
 	for _, gap := range uncompleted(Task{Start: 0, End: total - 1}, completed) {
@@ -36,6 +43,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for i := range states {
 		states[i] = newWorkerState()
 	}
+	d.workerCount = d.workersN
 
 	var workers sync.WaitGroup
 	workers.Add(d.workersN)
@@ -65,9 +73,6 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		workers.Wait()
 		stopMonitor()
 		monitorWG.Wait()
-		// Drain any tasks pushed by the monitor after workers exited. Skip
-		// if the parent context is already cancelled — the download is
-		// failing, extra bytes won't help.
 		if ctx.Err() == nil {
 			for {
 				task, ok := queue.Pop()
@@ -86,12 +91,14 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		close(done)
 	}()
 
+	// Print initial manifest path if verbose
+	if d.manifest != nil {
+		d.vlog("integrity checking enabled: %s", d.outFile+".gofetch.manifest")
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			// Save final resume state before exiting, so the next run can
-			// pick up where we left off. Then wait for workers + drain
-			// goroutine so we never close f underneath an in-flight WriteAt.
 			d.maybeSaveResume(states)
 			<-done
 			return ctx.Err()

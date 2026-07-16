@@ -3,21 +3,59 @@ package fetch
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"sync/atomic"
+	"time"
 )
 
-// progress tracks total bytes downloaded across all workers.
-// Uses atomic CAS for lock-free increments; the cap at total
-// prevents overshoot when stolen tasks re-download bytes already
-// counted by another worker.
-type progress struct {
-	total int64
-	done  atomic.Int64
+// humanBytes returns a short IEC-formatted byte count.
+func humanBytes(n int64) string {
+	const k = 1024
+	if n < k {
+		return strconv.FormatInt(n, 10) + " B"
+	}
+	switch {
+	case n < k*k:
+		return formatFixed1(float64(n)/k) + " KB"
+	case n < k*k*k:
+		return formatFixed1(float64(n)/k/k) + " MB"
+	default:
+		return formatFixed2(float64(n)/k/k/k) + " GB"
+	}
 }
 
-func newProgress(total int64) *progress { return &progress{total: total} }
+func formatFixed1(f float64) string {
+	f += 0.05
+	whole := int64(f)
+	frac := int64((f - float64(whole)) * 10)
+	return strconv.FormatInt(whole, 10) + "." + strconv.FormatInt(frac, 10)
+}
 
-// add increments done by n, capped at total to prevent overshoot.
+func formatFixed2(f float64) string {
+	f += 0.005
+	whole := int64(f)
+	frac := int64((f - float64(whole)) * 100)
+	if frac < 10 {
+		return strconv.FormatInt(whole, 10) + ".0" + strconv.FormatInt(frac, 10)
+	}
+	return strconv.FormatInt(whole, 10) + "." + strconv.FormatInt(frac, 10)
+}
+
+// progress tracks total bytes downloaded across all workers.
+type progress struct {
+	total     int64
+	done      atomic.Int64
+	startTime int64
+	prevDone  int64
+	prevTime  int64
+	ewmaSpeed float64
+}
+
+func newProgress(total int64) *progress {
+	now := time.Now().UnixNano()
+	return &progress{total: total, startTime: now, prevTime: now}
+}
+
 func (p *progress) add(n int64) {
 	for {
 		cur := p.done.Load()
@@ -34,20 +72,40 @@ func (p *progress) add(n int64) {
 	}
 }
 
-// snapshot returns (done, total).
 func (p *progress) snapshot() (int64, int64) {
 	return p.done.Load(), p.total
 }
 
-// progressBar is a reusable buffer for the progress bar display.
-// Allocated once and reused across all printProgress calls.
-var progressBar = [24]byte{}
+func (p *progress) speedAndETA() (bytesPerSec float64, eta time.Duration) {
+	now := time.Now().UnixNano()
+	curDone := p.done.Load()
+	dt := float64(now-p.prevTime) / float64(time.Second)
+	if dt > 0.5 {
+		dd := float64(curDone - p.prevDone)
+		instant := dd / dt
+		if p.ewmaSpeed == 0 {
+			p.ewmaSpeed = instant
+		} else {
+			p.ewmaSpeed = 0.3*instant + 0.7*p.ewmaSpeed
+		}
+		p.prevDone = curDone
+		p.prevTime = now
+	}
+	bytesPerSec = p.ewmaSpeed
+	if bytesPerSec > 0 {
+		remaining := p.total - curDone
+		eta = time.Duration(float64(time.Second) * float64(remaining) / bytesPerSec)
+	}
+	return
+}
 
-// printProgress renders the progress bar. Final=true emits a newline
-// and clears via ANSI CSI-K.
 func (d *Downloader) printProgress(p *progress, final bool) {
+	if d.quiet {
+		return
+	}
+	var bar [24]byte
 	done, total := p.snapshot()
-	w := len(progressBar)
+	w := len(bar)
 	if total <= 0 {
 		if final {
 			fmt.Fprint(os.Stderr, "\r  ? / ?\033[K\n")
@@ -61,21 +119,28 @@ func (d *Downloader) printProgress(p *progress, final bool) {
 	if filled > w {
 		filled = w
 	}
-	for i := range progressBar {
+	for i := range bar {
 		if i < filled {
-			progressBar[i] = '#'
+			bar[i] = '#'
 		} else {
-			progressBar[i] = '.'
+			bar[i] = '.'
 		}
 	}
+	speed, eta := p.speedAndETA()
+	speedStr := humanBytes(int64(speed)) + "/s"
+	etaStr := ""
+	if speed > 0 && !final {
+		etaStr = "  ETA " + formatDuration(eta)
+	}
 	if final {
-		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s\033[K\n", progressBar[:], pct*100, humanBytes(done), humanBytes(total))
+		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s  %s\033[K\n",
+			bar[:], pct*100, humanBytes(done), humanBytes(total), speedStr)
 	} else {
-		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s   ", progressBar[:], pct*100, humanBytes(done), humanBytes(total))
+		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s  %s%s   ",
+			bar[:], pct*100, humanBytes(done), humanBytes(total), speedStr, etaStr)
 	}
 }
 
-// clamp returns v clamped to [lo, hi].
 func clamp(v, lo, hi float64) float64 {
 	if v < lo {
 		return lo
@@ -84,4 +149,11 @@ func clamp(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
+}
+
+// verbose logging — set on Downloader, not a global.
+func (d *Downloader) vlog(format string, args ...any) {
+	if d.verbose {
+		fmt.Fprintf(os.Stderr, "gofetch: "+format+"\n", args...)
+	}
 }

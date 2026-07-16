@@ -1,6 +1,6 @@
 // Package fetch implements a streaming, range-aware HTTP downloader
 // with adaptive work-stealing, multi-mirror support, resume capability,
-// and SHA-256 integrity verification.
+// and integrity verification.
 package fetch
 
 import (
@@ -13,71 +13,66 @@ import (
 	"time"
 )
 
-// Downloader drives the parallel download of a single URL (or mirror
-// set) into a single file.
+// Downloader drives the parallel download of a single URL into a single file.
 type Downloader struct {
 	url           string
-	mirrors       []string
 	outFile       string
 	workersN      int
 	bufSize       int
-	userAgent     string
 	resumeEnabled bool
+	quiet         bool
+	verbose       bool
 
 	client       *http.Client
+	autoConfig   AutoConfig
 	totalSize    int64
-	expectedHash string // SHA-256 hex; empty = skip verification
+	hashAlgo     string // "sha256" or "sha512"
+	expectedHash string
 	resumePath   string
+	manifest     *Manifest
 	startTime    time.Time
+	workerCount  int // actual workers used (for summary)
 
-	retryMu        sync.Mutex
-	retryCount     map[Task]int
 	lastResumeSave atomic.Int64
+	retryMu        sync.Mutex
+	retryCount     map[int64]int
 }
 
-// Options configures NewDownloader.
+// Options configures NewDownloader. Zero values enable auto-optimization.
+// Only set fields you care about — everything else is auto-tuned.
 type Options struct {
-	WorkerCount    int
-	BufSize        int
-	Timeout        time.Duration
-	Mirrors        []string
-	ExpectedSHA256 string // hex-encoded SHA-256; empty skips verification
-	Resume         bool
-	UserAgent      string
+	NoResume     bool
+	HashAlgo     string // "sha256" or "sha512"; empty = sha256
+	ExpectedHash string // hex hash to verify; empty = skip
+	Verbose      bool
+	Quiet        bool
 }
 
-// NewDownloader constructs a Downloader with sane defaults.
+// NewDownloader constructs a Downloader with auto-configured defaults.
 func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
-	if opt.WorkerCount < 1 {
-		opt.WorkerCount = 4
+	ac := AutoConfigure(0)
+
+	algo := opt.HashAlgo
+	if algo == "" {
+		algo = "sha256"
 	}
-	if opt.BufSize < 1 {
-		opt.BufSize = 64 * 1024
-	}
-	if opt.Timeout <= 0 {
-		opt.Timeout = 30 * time.Second
-	}
-	ua := opt.UserAgent
-	if ua == "" {
-		ua = "gofetch/0.1"
-	}
+
 	d := &Downloader{
 		url:           rawURL,
-		mirrors:       opt.Mirrors,
 		outFile:       outPath,
-		workersN:      opt.WorkerCount,
-		bufSize:       opt.BufSize,
-		userAgent:     ua,
-		resumeEnabled: opt.Resume,
+		workersN:      ac.Workers,
+		bufSize:       ac.BufSize,
+		resumeEnabled: !opt.NoResume,
+		quiet:         opt.Quiet,
+		verbose:       opt.Verbose,
+		autoConfig:    ac,
+		hashAlgo:      algo,
+		expectedHash:  opt.ExpectedHash,
 		resumePath:    resumePath(outPath),
-		expectedHash:  opt.ExpectedSHA256,
 	}
 	d.client = &http.Client{
-		Timeout: opt.Timeout,
-		Transport: &http.Transport{
-			IdleConnTimeout:   90 * time.Second,
-			ForceAttemptHTTP2: true,
-		},
+		Timeout:   ac.Timeout,
+		Transport: newAutoTransport(ac),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return errors.New("too many redirects")
@@ -88,25 +83,30 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	return d
 }
 
-// Download fetches d.url (with mirror failover) into d.outFile.
+// Download fetches d.url into d.outFile.
 // Returns nil on success, or the first worker error.
 func (d *Downloader) Download(ctx context.Context) error {
 	d.startTime = time.Now()
 
-	mirror, info, err := d.selectMirror(ctx)
+	info, err := d.probeURL(ctx, d.url)
 	if err != nil {
-		return fmt.Errorf("mirror: %w", err)
+		return fmt.Errorf("probe: %w", err)
 	}
-	d.url = mirror.URL
 	d.totalSize = info.total
+	d.autoConfig.Retune(info.total)
+	d.workersN = d.autoConfig.Workers
+	d.bufSize = d.autoConfig.BufSize
+	d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
 
 	var completed []Task
 	if d.resumeEnabled {
 		if st, _ := loadResume(d.resumePath, d.url, info.total); st != nil {
 			completed = st.Completed
 			sortByStart(completed)
+			d.vlog("resumed from %d completed chunks", len(completed))
 		}
 	}
+
 	if !info.supportsRanges {
 		return d.singleDownload(ctx, info.total, completed)
 	}

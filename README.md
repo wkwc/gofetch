@@ -1,20 +1,24 @@
 # gofetch
 
-A small, single-binary streaming downloader in Go with adaptive range work-stealing,
-pre-allocated sparse files, concurrent `WriteAt` writes, multi-mirror failover,
-resume capability, and integrity verification.
+A small, single-binary concurrent downloader in Go with adaptive range work-stealing,
+pre-allocated sparse files, concurrent `WriteAt` writes, resume capability,
+and integrity verification.
 
 ```
-$ gofetch -w 4 https://proof.ovh.net/files/10Mb.dat
-  #####...................  20.0%  2.0 MB / 10.0 MB
-  ####################....  81.8%  8.2 MB / 10.0 MB
-  ########################  99.8%  10.0 MB / 10.0 MB
+$ gofetch https://proof.ovh.net/files/10Mb.dat
+  ######################## 100.0%  10.0 MB / 10.0 MB  1.2 GB/s  ETA 0s
+
+  download complete
+  bytes:   10.0 MB
+  time:    8ms
+  speed:   1.25 GB/s
+  workers: 16
 ```
 
 ## Why
 
 Most "range downloaders" are dumb: split into N chunks, fetch each, merge at the end.
-That wastes disk I/O on temp files, breaks when one mirror is slow, and offers nothing
+That wastes disk I/O on temp files, breaks when a server is slow, and offers nothing
 but "parallel curl."
 
 `gofetch` does three things differently:
@@ -33,64 +37,83 @@ but "parallel curl."
 
 | Feature | Flag | Description |
 |---------|------|-------------|
-| **Workers** | `-w N` | Concurrent range workers (default 4) |
-| **Buffer** | `-buf N` | Per-worker read buffer (default 64 KiB) |
-| **Timeout** | `-timeout D` | Per-request HTTP timeout (default 30s) |
-| **Output** | `-o PATH` | Output file path |
-| **Quiet** | `-q` | Suppress progress bar |
-| **Mirrors** | `-mirrors "u1,u2"` | Comma-separated fallback URLs; fastest healthy one wins |
-| **Hash** | `-hash <hex>` | Expected SHA256 (hex); fails on mismatch |
-| **Resume** | `-resume` (default) | Save `.gofetch.resume` state; resume on restart |
-| **User-Agent** | `-useragent` | Custom User-Agent header (default `gofetch/0.1`) |
+| **Output** | `-o PATH` | Output file path (default: basename of URL) |
+| **Quiet** | `-q` | Suppress progress bar; print only filename on success |
+| **Verbose** | `-v` | Verbose logging to stderr (mirror selection, task starts, retries, chunk verification) |
+| **Hash** | `-h SPEC` | Verify integrity: `sha256:hex`, `sha512:hex`, `auto` (fetch sidecar), or path to `.sha256`/`.sha512` file |
+| **No Resume** | `--no-resume` | Disable resume from `.gofetch.resume` (default: enabled) |
 
 ## Usage
 
 ```bash
 # Basic download
-gofetch https://example.com/large.bin
+gofetch https://example.com/file.bin
 
-# 8 workers, custom output, with SHA256 verification
-gofetch -w 8 -o model.safetensors -hash 4670af0752b0ee0a571c17eb6923b722e9c557cd26e6b9ec25c2155098f3dc62 \
-  https://huggingface.co/.../model.safetensors
+# Custom output path
+gofetch -o out.bin https://example.com/file.bin
 
-# Mirror list + resume
-gofetch -mirrors "https://mirror1/file,https://mirror2/file" \
-  -resume -o dataset.tar.zst \
-  https://primary/file
+# Hash verification (explicit)
+gofetch -h sha256:abc123... https://example.com/file.bin
+
+# SHA-512 verification
+gofetch -h sha512:abc123... https://example.com/file.bin
+
+# Auto-detect sidecar hash file (fetches URL.sha256, URL.sha512, etc.)
+gofetch -h auto https://example.com/file.bin
+
+# Local sidecar file
+gofetch -h /path/to/file.sha256 https://example.com/file.bin
+
+# Quiet mode (script-friendly: prints filename only)
+gofetch -q https://example.com/file.bin
+
+# Verbose mode (debug to stderr)
+gofetch -v https://example.com/file.bin
+
+# Disable resume (always download fresh)
+gofetch --no-resume https://example.com/file.bin
 ```
 
 If the server doesn't support `Range`, it gracefully falls back to a single GET stream.
 
 ## Resume
 
-On first run with `-resume` (default), a sidecar file `<output>.gofetch.resume`
-is created/updated every 5 seconds with the set of completed byte ranges.
-If the process is killed or crashes, re-run the same command: it reads the state,
-skips the completed ranges, and continues from where it left off.
+On first run, a sidecar file `<output>.gofetch.resume` is created/updated
+with the set of completed byte ranges. If the process is killed or crashes,
+re-run the same command: it reads the state, skips the completed ranges,
+and continues from where it left off.
 
 Completed ranges are deduplicated and merged before saving, so the state file
 stays compact even across many abort/resume cycles.
 
-## Mirror selection
+## Integrity Verification
 
-All mirrors (including the primary URL) are probed in parallel (HEAD → range GET fallback).
-The first healthy mirror with the lowest 1-byte latency is chosen.
+The `-h` flag supports multiple formats:
 
-If a range request returns 200 OK instead of 206 Partial Content (indicating the server
-does not actually support range requests despite advertising it), the download fails
-with a clear error.
+| Format | Example |
+|--------|---------|
+| `sha256:hex` | `gofetch -h sha256:abc123...` |
+| `sha512:hex` | `gofetch -h sha512:abc123...` |
+| `auto` (fetch sidecar) | `gofetch -h auto https://...` fetches `.sha256` then `.sha512` sidecars |
+| bare hex (assumes sha256) | `gofetch -h abc123...` |
+| local sidecar file | `gofetch -h /path/file.sha256 https://...` |
 
-## Integrity
+Sidecar files are parsed in common formats: `<hash> [filename]` or just `<hash>`.
+Algorithm is inferred from hash length (64 = sha256, 128 = sha512) or file extension.
 
-- `-hash <hex>`: verifies SHA256 after download.
+For extra assurance, a manifest file (`<output>.gofetch.manifest`) can be created
+alongside the download containing per-chunk SHA-256 hashes. If present, gofetch
+verifies each chunk during download and the whole file on completion.
 
-## Error handling
+## Error Handling
 
 - **Transient network errors** (connection reset, unexpected EOF, timeout) are retried
-  with exponential backoff (up to 5 retries per range chunk).
-- **Permanent errors** (invalid URL, unsupported status codes) kill the download immediately.
+  with exponential backoff (up to 10 retries per chunk).
+- **HTTP 429/503/502/504/408** are retried respecting `Retry-After` header.
+- **Permanent errors** (invalid URL, unsupported status codes) fail immediately.
+- **HTTP 416** (Range Not Satisfiable) is treated as "already complete" and skipped.
 
-## Project layout
+## Project Layout
 
 ```
 gofetch/
@@ -102,20 +125,27 @@ gofetch/
     monitor.go                     # Work-stealing monitor
     range.go                       # Parallel range-download orchestration
     single.go                      # Single-stream fallback (no range support)
-    mirror.go                      # Mirror probing, selection, Content-Range parsing
+    mirror.go                      # Server probing, Content-Range parsing
     seeds.go                       # Range splitting and gap computation
     task.go                        # Task struct and lock-free FIFO queue
     buffer.go                      # sync.Pool buffer recycling
     progress.go                    # Thread-safe progress tracking and display
     finalize.go                    # Hash verification, resume save, sparse allocation
     resume.go                      # Resume state persistence (JSON sidecar)
-    hash.go                        # SHA-256 computation and verification
+    hash.go                        # SHA-256/512 computation and verification
+    manifest.go                    # Per-chunk integrity manifest
     format.go                      # Human-readable byte formatting
+    verbose.go                     # Verbose logging
+    transport.go                   # HTTP transport factory
+    optimizer.go                   # Auto-configuration logic
+    extra_tests.go                 # Additional unit tests
+    testhelpers_test.go            # Test fixtures and helpers
+    *_test.go                      # Unit and e2e tests
 ```
 
 Single binary, zero external dependencies — stdlib only.
 
-## Design notes
+## Design Notes
 
 - **Pre-allocation:** `os.File.Truncate(total)` on an empty file gives a sparse
   file on Linux/ext4 — instant size, no real block I/O until bytes are written.
@@ -127,8 +157,10 @@ Single binary, zero external dependencies — stdlib only.
   and picks up the next task from the queue (which now includes the stolen
   remainder).
 - **Progress atomicity:** `bytesDone` is an `atomic.Int64` updated per buffer
-  flush; the monitor reads it without locks. The total progress uses a mutex
+  flush; the monitor reads it without locks. The total progress uses a CAS loop
   because it's a read+modify pair, but contention is ~1 lock per 64 KiB.
+- **Chunk-level integrity:** When a manifest is present, each chunk is verified
+  against its expected hash immediately after being written to disk.
 
 ## Tested
 
@@ -137,10 +169,12 @@ Single binary, zero external dependencies — stdlib only.
   and `100Mb.dat` (100 MiB) — MD5/SHA256 match.
 - `go vet`, `gofmt`, `go build` clean.
 - Race detector clean (`go test -race`).
+- `staticcheck` clean.
+- 30 tests pass under `-race -count=5`.
 
 ## Limitations
 
-- No proxy support yet.
+- No proxy support yet (reads `HTTP_PROXY`/`HTTPS_PROXY` from env but not fully tested).
 - Resume state only stores completed *ranges*; partially written ranges are
   retried from scratch on resume (the file already has those bytes, so it's
   idempotent).

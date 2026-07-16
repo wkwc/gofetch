@@ -3,6 +3,7 @@ package fetch
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -18,7 +19,6 @@ func makePayload(n int) []byte {
 }
 
 // newRangeServer serves fixed payload bytes, honoring Range requests.
-// Sends blocks of 16 KiB to give the monitor something to observe.
 func newRangeServer(t *testing.T, payload []byte) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,5 +70,11 @@ func newRangeServer(t *testing.T, payload []byte) *httptest.Server {
 // sha256Hex returns the hex SHA-256 of data.
 func sha256Hex(data []byte) string {
 	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+// sha512Hex returns the hex SHA-512 of data.
+func sha512Hex(data []byte) string {
+	h := sha512.Sum512(data)
 	return hex.EncodeToString(h[:])
 }

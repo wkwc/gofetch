@@ -2,30 +2,92 @@ package fetch
 
 import (
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
-	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"strings"
 	"sync"
 )
 
-// hashBufSize is the buffer size used for SHA-256 computation.
+// hashBufSize is the buffer size used for hash computation.
 const hashBufSize = 256 * 1024 // 256 KiB
 
 var hashBufPool = sync.Pool{
 	New: func() any { b := make([]byte, hashBufSize); return &b },
 }
 
-// fileHexSHA256 returns the hex-encoded SHA-256 of the file at path.
-func fileHexSHA256(path string) (string, error) {
+// newHash returns a hash.Hash for the given algorithm name.
+func newHash(algo string) hash.Hash {
+	switch algo {
+	case "sha512":
+		return sha512.New()
+	default:
+		return sha256.New()
+	}
+}
+
+// hashSize returns the digest size for the given algorithm.
+func hashSize(algo string) int {
+	switch algo {
+	case "sha512":
+		return sha512.Size
+	default:
+		return sha256.Size
+	}
+}
+
+// ParseHashFlag parses "-h sha256:abcdef..." or "-h sha512:abcdef...".
+// Also accepts bare hex (treated as sha256 for backward compatibility).
+// Returns (algo, hex, error).
+func ParseHashFlag(s string) (algo, hexHash string, err error) {
+	if s == "" {
+		return "", "", nil
+	}
+	// Check for "algo:hex" format
+	if idx := strings.IndexByte(s, ':'); idx > 0 {
+		a := strings.ToLower(s[:idx])
+		h := s[idx+1:]
+		if a != "sha256" && a != "sha512" {
+			return "", "", fmt.Errorf("unsupported hash algorithm %q (use sha256 or sha512)", a)
+		}
+		if err := validateHexHash(h, a); err != nil {
+			return "", "", err
+		}
+		return a, h, nil
+	}
+	// Bare hex — assume sha256
+	if err := validateHexHash(s, "sha256"); err != nil {
+		return "", "", err
+	}
+	return "sha256", s, nil
+}
+
+// validateHexHash checks that s is a valid hex string of the correct length.
+func validateHexHash(s, algo string) error {
+	expected := hashSize(algo) * 2
+	if len(s) != expected {
+		return fmt.Errorf("expected %d hex characters for %s, got %d", expected, algo, len(s))
+	}
+	for i := range s {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return fmt.Errorf("expected %d hex characters for %s", expected, algo)
+		}
+	}
+	return nil
+}
+
+// fileHexHash computes the hex-encoded hash of the file at path.
+func fileHexHash(path, algo string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	h := sha256.New()
+	h := newHash(algo)
 	bp := hashBufPool.Get().(*[]byte)
 	defer hashBufPool.Put(bp)
 	if _, err := io.CopyBuffer(h, f, *bp); err != nil {
@@ -39,32 +101,18 @@ func hexEqual(a, b string) bool {
 	return len(a) == len(b) && strings.EqualFold(a, b)
 }
 
-// ValidateHexSHA256 returns nil if s is a valid 64-character hex string.
-func ValidateHexSHA256(s string) error {
-	if len(s) != sha256.Size*2 {
-		return errors.New("expected 64 hex characters")
-	}
-	for i := range s {
-		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return errors.New("expected 64 hex characters")
-		}
-	}
-	return nil
-}
-
-// verifyFileHash computes the file's SHA-256 and compares against expected.
+// verifyFileHash computes the file's hash and compares against expected.
 // Returns nil on match or when expected is empty.
-func verifyFileHash(path, expected string) error {
+func verifyFileHash(path, algo, expected string) error {
 	if expected == "" {
 		return nil
 	}
-	got, err := fileHexSHA256(path)
+	got, err := fileHexHash(path, algo)
 	if err != nil {
 		return err
 	}
 	if !hexEqual(got, expected) {
-		return fmt.Errorf("hash mismatch: expected %s, got %s", expected, got)
+		return fmt.Errorf("hash mismatch (%s): expected %s, got %s", algo, expected, got)
 	}
 	return nil
 }

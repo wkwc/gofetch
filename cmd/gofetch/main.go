@@ -1,19 +1,27 @@
-// Command gofetch downloads a single URL (or mirror list) to disk using
-// concurrent HTTP range requests, adaptive work-stealing, multi-mirror
-// failover, resume capability, and integrity verification.
+// Command gofetch is an opinionated concurrent HTTP downloader.
+//
+// Usage:
+//
+//	gofetch [options] <url>
+//
+// It just works. Workers, buffers, timeouts, retries, compression, proxy,
+// and resume are all auto-configured. The only flags are for things that
+// genuinely require user input: output path, hash verification, and
+// verbosity.
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/local/gofetch/internal/fetch"
 )
@@ -24,22 +32,27 @@ func main() {
 
 func run() int {
 	var (
-		workers  = flag.Int("w", 4, "number of concurrent workers")
-		bufSize  = flag.Int("buf", 64*1024, "per-worker buffer size in bytes")
-		timeout  = flag.Duration("timeout", 30*time.Second, "per-request HTTP timeout")
 		outPath  = flag.String("o", "", "output file path (default: basename of URL)")
 		quiet    = flag.Bool("q", false, "suppress progress output")
-		mirrors  = flag.String("mirrors", "", "comma-separated list of mirror URLs")
-		hashFlag = flag.String("hash", "", "expected SHA256 hash (hex) of the file")
-		resume   = flag.Bool("resume", true, "enable resume from .gofetch.resume state file")
-		ua       = flag.String("useragent", "gofetch/0.1", "User-Agent header")
+		verbose  = flag.Bool("v", false, "verbose logging")
+		hashFlag = flag.String("h", "", "verify integrity (sha256:hex, sha512:hex, auto, or path to .sha256/.sha512 sidecar)")
+		noResume = flag.Bool("no-resume", false, "disable resume (default: on)")
 	)
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: gofetch [options] <url>")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "opinionated concurrent downloader — everything auto-tuned internally")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "options:")
 		flag.PrintDefaults()
-		fmt.Fprintln(os.Stderr, "\nexamples:")
-		fmt.Fprintln(os.Stderr, "  gofetch -w 8 https://example.com/file.bin")
-		fmt.Fprintln(os.Stderr, "  gofetch -mirrors 'https://a/file,https://b/file' -resume -o out.bin")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "examples:")
+		fmt.Fprintln(os.Stderr, "  gofetch https://example.com/file.bin")
+		fmt.Fprintln(os.Stderr, "  gofetch -o out.bin https://example.com/file.bin")
+		fmt.Fprintln(os.Stderr, "  gofetch -h auto https://example.com/file.bin        # auto-detect .sha256/.sha512 sidecar")
+		fmt.Fprintln(os.Stderr, "  gofetch -h sha256:abc123... https://example.com/file.bin")
+		fmt.Fprintln(os.Stderr, "  gofetch -q https://example.com/file.bin             # quiet (prints filename only)")
+		fmt.Fprintln(os.Stderr, "  gofetch -v https://example.com/file.bin              # verbose (debug to stderr)")
 	}
 	flag.Parse()
 
@@ -59,23 +72,6 @@ func run() int {
 		return 1
 	}
 
-	if *hashFlag != "" {
-		if err := fetch.ValidateHexSHA256(*hashFlag); err != nil {
-			fmt.Fprintln(os.Stderr, "gofetch: invalid -hash:", err)
-			return 1
-		}
-	}
-
-	var mirrorList []string
-	if *mirrors != "" {
-		for _, m := range strings.Split(*mirrors, ",") {
-			m = strings.TrimSpace(m)
-			if m != "" && m != rawURL {
-				mirrorList = append(mirrorList, m)
-			}
-		}
-	}
-
 	out := *outPath
 	if out == "" {
 		base := filepath.Base(u.Path)
@@ -88,14 +84,18 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	algo, hashHex, err := resolveHash(ctx, *hashFlag, rawURL, out)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gofetch:", err)
+		return 1
+	}
+
 	d := fetch.NewDownloader(rawURL, out, fetch.Options{
-		WorkerCount:    *workers,
-		BufSize:        *bufSize,
-		Timeout:        *timeout,
-		Mirrors:        mirrorList,
-		Resume:         *resume,
-		ExpectedSHA256: *hashFlag,
-		UserAgent:      *ua,
+		HashAlgo:     algo,
+		ExpectedHash: hashHex,
+		NoResume:     *noResume,
+		Verbose:      *verbose,
+		Quiet:        *quiet,
 	})
 
 	if err := d.Download(ctx); err != nil {
@@ -106,4 +106,126 @@ func run() int {
 		fmt.Println(out)
 	}
 	return 0
+}
+
+// resolveHash figures out the hash algorithm and expected hex from the -h flag.
+// Supports:
+//   - ""            → no verification
+//   - "auto"        → try to fetch <url>.sha256 or <url>.sha512 sidecar
+//   - "sha256:hex"  → explicit algo + hex
+//   - "sha512:hex"  → explicit algo + hex
+//   - "hex..."      → bare hex, treated as sha256
+//   - "/path/file"  → read sidecar file from local path
+func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo, hashHex string, err error) {
+	if flag == "" {
+		return "", "", nil
+	}
+	if flag == "auto" {
+		return autoDetectSidecar(ctx, rawURL)
+	}
+	// Check if it's a local file path
+	if _, statErr := os.Stat(flag); statErr == nil {
+		return readSidecarFile(flag)
+	}
+	// Check if it's a URL
+	if strings.HasPrefix(flag, "http://") || strings.HasPrefix(flag, "https://") {
+		return fetchSidecarURL(ctx, flag)
+	}
+	// Otherwise parse as algo:hex or bare hex
+	return fetch.ParseHashFlag(flag)
+}
+
+// autoDetectSidecar tries to fetch <url>.sha256 then <url>.sha512 sidecar files.
+func autoDetectSidecar(ctx context.Context, rawURL string) (algo, hashHex string, err error) {
+	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sha512sum"} {
+		sidecarURL := rawURL + suffix
+		algo, hex, e := fetchSidecarURL(ctx, sidecarURL)
+		if e == nil && hex != "" {
+			return algo, hex, nil
+		}
+	}
+	return "", "", nil // no sidecar found — silently skip
+}
+
+// fetchSidecarURL fetches a sidecar hash file from a URL and parses it.
+func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sidecarURL, nil)
+	if err != nil {
+		return "", "", nil // not an error — just not found
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", "", nil
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		return "", "", nil
+	}
+	return parseSidecarContent(string(data), sidecarURL)
+}
+
+// readSidecarFile reads a local sidecar hash file and parses it.
+func readSidecarFile(path string) (algo, hashHex string, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", fmt.Errorf("read sidecar: %w", err)
+	}
+	return parseSidecarContent(string(data), path)
+}
+
+// parseSidecarContent parses a sidecar hash file. Common formats:
+//
+//	<hash>  <filename>
+//	<hash>
+//
+// The algorithm is inferred from the hash length (64 = sha256, 128 = sha512)
+// or from the file extension (.sha256, .sha512). The hex is validated.
+func parseSidecarContent(content, sourcePath string) (algo, hashHex string, err error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", "", fmt.Errorf("empty sidecar file: %s", sourcePath)
+	}
+	// Take the first token (the hash)
+	fields := strings.Fields(content)
+	if len(fields) == 0 {
+		return "", "", fmt.Errorf("no hash found in sidecar: %s", sourcePath)
+	}
+	hexHash := fields[0]
+
+	// Validate hex characters
+	if !isValidHex(hexHash) {
+		return "", "", fmt.Errorf("invalid hex in sidecar: %s", sourcePath)
+	}
+
+	// Infer algorithm from hash length
+	switch len(hexHash) {
+	case 64:
+		return "sha256", hexHash, nil
+	case 128:
+		return "sha512", hexHash, nil
+	default:
+		// Fall back to file extension
+		switch {
+		case strings.HasSuffix(sourcePath, ".sha256"), strings.HasSuffix(sourcePath, ".sha256sum"):
+			return "sha256", hexHash, nil
+		case strings.HasSuffix(sourcePath, ".sha512"), strings.HasSuffix(sourcePath, ".sha512sum"):
+			return "sha512", hexHash, nil
+		}
+		return "", "", fmt.Errorf("cannot determine hash algorithm from sidecar (hex length %d): %s", len(hexHash), sourcePath)
+	}
+}
+
+// isValidHex checks if a string contains only valid hex characters.
+func isValidHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }

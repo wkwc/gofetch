@@ -59,15 +59,15 @@ func TestVerifyFileHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := verifyFileHash(path, want); err != nil {
+	if err := verifyFileHash(path, "sha256", want); err != nil {
 		t.Errorf("verifyFileHash match: %v", err)
 	}
 	// empty expected → no-op
-	if err := verifyFileHash(path, ""); err != nil {
+	if err := verifyFileHash(path, "sha256", ""); err != nil {
 		t.Errorf("verifyFileHash empty: %v", err)
 	}
 	// wrong hash
-	if err := verifyFileHash(path, strings.Repeat("0", 64)); err == nil {
+	if err := verifyFileHash(path, "sha256", strings.Repeat("0", 64)); err == nil {
 		t.Error("verifyFileHash wrong hash: expected error, got nil")
 	}
 }

@@ -11,7 +11,6 @@ const (
 	stealMinChunk    = 256 * 1024
 	stealSlowBytes   = 1 << 20
 	stealGracePeriod = 1500 * time.Millisecond
-	maxTaskRetries   = 5
 )
 
 // monitor polls each worker. If a worker is on a large task but hasn't

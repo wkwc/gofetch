@@ -22,7 +22,7 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", d.userAgent)
+	req.Header.Set("User-Agent", userAgent)
 
 	resp, err := d.client.Do(req)
 	if err != nil {
