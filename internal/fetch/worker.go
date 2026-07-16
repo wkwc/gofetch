@@ -185,12 +185,8 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 					return nil
 				}
 			}
-			written, err := f.WriteAt(buf[:n], cursor)
-			if err != nil {
+			if _, err := f.WriteAt(buf[:n], cursor); err != nil {
 				return err
-			}
-			if written != n {
-				return fmt.Errorf("short write: wanted %d, wrote %d", n, written)
 			}
 			cursor += int64(n)
 			prog.add(int64(n))

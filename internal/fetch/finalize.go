@@ -61,7 +61,7 @@ func collectCompleted(states []*workerState) []Task {
 // If resume is enabled and the file already has the target size,
 // it is opened without truncation to preserve existing bytes.
 func allocateSparse(path string, size int64, resume bool) (*os.File, error) {
-	flags := os.O_RDWR | os.O_CREATE
+	flags := os.O_WRONLY | os.O_CREATE
 	if !resume {
 		flags |= os.O_TRUNC
 	}

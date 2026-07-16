@@ -20,7 +20,6 @@ type Downloader struct {
 	outFile       string
 	workersN      int
 	bufSize       int
-	timeout       time.Duration
 	userAgent     string
 	resumeEnabled bool
 
@@ -67,7 +66,6 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		outFile:       outPath,
 		workersN:      opt.WorkerCount,
 		bufSize:       opt.BufSize,
-		timeout:       opt.Timeout,
 		userAgent:     ua,
 		resumeEnabled: opt.Resume,
 		resumePath:    resumePath(outPath),

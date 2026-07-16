@@ -90,7 +90,8 @@ func dedupTasks(tasks []Task) []Task {
 	copy(sorted, tasks)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
 
-	merged := []Task{sorted[0]}
+	merged := make([]Task, 0, len(tasks))
+	merged = append(merged, sorted[0])
 	for _, t := range sorted[1:] {
 		last := &merged[len(merged)-1]
 		if t.Start <= last.End+1 {

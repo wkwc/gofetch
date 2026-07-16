@@ -54,6 +54,10 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "gofetch: invalid url:", rawURL)
 		return 1
 	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		fmt.Fprintln(os.Stderr, "gofetch: unsupported scheme:", u.Scheme, "(use http or https)")
+		return 1
+	}
 
 	var mirrorList []string
 	if *mirrors != "" {

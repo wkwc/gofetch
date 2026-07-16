@@ -110,8 +110,8 @@ func TestParseUint(t *testing.T) {
 		{"42", 42, true},
 		{"999999999", 999999999, true},
 		{"9223372036854775807", 9223372036854775807, true}, // MaxInt64
-		{"9223372036854775808", 0, false},                   // MaxInt64+1 → overflow
-		{"99999999999999999999", 0, false},                  // way too big
+		{"9223372036854775808", 0, false},                  // MaxInt64+1 → overflow
+		{"99999999999999999999", 0, false},                 // way too big
 		{"", 0, false},
 		{"abc", 0, false},
 		{"12abc", 0, false},

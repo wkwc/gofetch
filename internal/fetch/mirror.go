@@ -39,7 +39,12 @@ func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, erro
 		info   probeInfo
 		err    error
 	}
-	all := append([]string{d.url}, d.mirrors...)
+	all := d.mirrors
+	if len(all) == 0 {
+		all = []string{d.url}
+	} else {
+		all = append([]string{d.url}, all...)
+	}
 	ch := make(chan result, len(all))
 	for _, u := range all {
 		go func(rawURL string) {
@@ -111,7 +116,11 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 	switch {
 	case resp.StatusCode == http.StatusOK:
 		ar := resp.Header.Get("Accept-Ranges")
-		return probeInfo{supportsRanges: ar != "" && ar != "none", total: resp.ContentLength, etag: resp.Header.Get("ETag")}, true, nil
+		return probeInfo{
+			supportsRanges: ar != "" && ar != "none",
+			total:          resp.ContentLength,
+			etag:           resp.Header.Get("ETag"),
+		}, true, nil
 	case resp.StatusCode == http.StatusMethodNotAllowed,
 		resp.StatusCode == http.StatusBadRequest,
 		resp.StatusCode == http.StatusNotImplemented:
