@@ -212,6 +212,13 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 	// allocations per HTTP attempt).
 	rangeHeader := "bytes=" + strconv.FormatInt(task.Start, 10) + "-" + strconv.FormatInt(task.End, 10)
 
+	// Pre-compute User-Agent and Accept-Encoding if needed.
+	acceptEncoding := ""
+	if d.autoConfig.Compress {
+		acceptEncoding = "gzip"
+	}
+
+	var lastErr error
 	// Bound the inner retry loop so a persistently-broken server cannot
 	// hold a worker forever.
 	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
@@ -221,10 +228,8 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 		}
 		req.Header.Set("Range", rangeHeader)
 		req.Header.Set("User-Agent", userAgent)
-		// Compression is disabled in AutoConfig for binary downloads. Kept for
-		// completeness in case user enables it manually (not currently exposed).
-		if d.autoConfig.Compress {
-			req.Header.Set("Accept-Encoding", "gzip")
+		if acceptEncoding != "" {
+			req.Header.Set("Accept-Encoding", acceptEncoding)
 		}
 
 		resp, err := d.client.Do(req)
@@ -239,6 +244,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 				wait = 5 * time.Second
 			}
 			drainAndClose(resp.Body)
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			d.vlog("HTTP %d on %d-%d, retrying after %s (attempt %d)",
 				resp.StatusCode, task.Start, task.End, wait, attempt+1)
 			select {
@@ -266,49 +272,59 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 			drainAndClose(resp.Body)
 			return fmt.Errorf("range %d-%d: status %d", task.Start, task.End, resp.StatusCode)
 		}
-		defer drainAndClose(resp.Body)
 
-		buf := acquireBuf(d.bufSize)
-		defer releaseBuf(buf)
-		cursor, end := task.Start, task.End
-		// Hoist manifest check out of the per-Read hot loop.
-		manifest := d.manifest
-		for {
-			n, rerr := resp.Body.Read(buf)
-			if n > 0 {
-				if remaining := end - cursor + 1; int64(n) > remaining {
-					n = int(remaining)
-					if n <= 0 {
-						return nil
-					}
-				}
-				if _, err := f.WriteAt(buf[:n], cursor); err != nil {
-					return err
-				}
-				cursor += int64(n)
-				prog.add(int64(n))
-				if ws != nil {
-					ws.bytesDone.Store(cursor - task.Start)
-				}
-				// Verify chunk against manifest if available (per-chunk integrity).
-				if manifest != nil {
-					if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
-						return err
-					}
-				}
-			}
-			if rerr != nil {
-				if errors.Is(rerr, io.EOF) {
-					return nil
-				}
-				return rerr
-			}
-			if cursor > end {
-				return nil
-			}
-		}
+		// On success path: read body. drainAndClose must be called here,
+		// not via defer (defer would accumulate across retry iterations).
+		return d.readBody(rctx, resp, task, prog, f, ws)
+	}
+	if lastErr != nil {
+		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, maxHTTPStatusRetries, lastErr)
 	}
 	return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status", task.Start, task.End, maxHTTPStatusRetries)
+}
+
+// readBody reads the response body into f with chunked writes and
+// optional per-chunk verification. Called once per successful request.
+func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, prog *progress, f *os.File, ws *workerState) error {
+	defer drainAndClose(resp.Body)
+
+	buf := acquireBuf(d.bufSize)
+	defer releaseBuf(buf)
+	cursor, end := task.Start, task.End
+	manifest := d.manifest // hoist out of per-Read hot loop
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if remaining := end - cursor + 1; int64(n) > remaining {
+				n = int(remaining)
+				if n <= 0 {
+					return nil
+				}
+			}
+			if _, err := f.WriteAt(buf[:n], cursor); err != nil {
+				return err
+			}
+			cursor += int64(n)
+			prog.add(int64(n))
+			if ws != nil {
+				ws.bytesDone.Store(cursor - task.Start)
+			}
+			if manifest != nil {
+				if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
+					return err
+				}
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return rerr
+		}
+		if cursor > end {
+			return nil
+		}
+	}
 }
 
 // bufPool recycles per-worker read buffers. Uses 64 KiB as base size;
