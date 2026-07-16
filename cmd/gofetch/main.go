@@ -59,6 +59,13 @@ func run() int {
 		return 1
 	}
 
+	if *hashFlag != "" {
+		if err := fetch.ValidateHexSHA256(*hashFlag); err != nil {
+			fmt.Fprintln(os.Stderr, "gofetch: invalid -hash:", err)
+			return 1
+		}
+	}
+
 	var mirrorList []string
 	if *mirrors != "" {
 		for _, m := range strings.Split(*mirrors, ",") {

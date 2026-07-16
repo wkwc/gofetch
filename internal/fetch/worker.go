@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -156,7 +157,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", task.Start, task.End))
+	req.Header.Set("Range", "bytes="+strconv.FormatInt(task.Start, 10)+"-"+strconv.FormatInt(task.End, 10))
 	req.Header.Set("User-Agent", d.userAgent)
 
 	resp, err := d.client.Do(req)

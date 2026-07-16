@@ -9,7 +9,8 @@ func splitRange(offset, length, chunkSize int64) []Task {
 		return nil
 	}
 	end := offset + length
-	var out []Task
+	n := (length + chunkSize - 1) / chunkSize
+	out := make([]Task, 0, n)
 	for cursor := offset; cursor < end; {
 		stop := cursor + chunkSize
 		if stop > end {

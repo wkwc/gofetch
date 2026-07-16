@@ -50,7 +50,7 @@ func (ws *workerState) stealPlan(now time.Time) (Task, context.CancelFunc, bool)
 	if t.Len() < 2*stealMinChunk {
 		return Task{}, nil, false
 	}
-	if now.Sub(time.Unix(0, ws.startedAt.Load())) < stealGracePeriod {
+	if time.Duration(now.UnixNano()-ws.startedAt.Load()) < stealGracePeriod {
 		return Task{}, nil, false
 	}
 	if ws.bytesDone.Load() >= stealSlowBytes {

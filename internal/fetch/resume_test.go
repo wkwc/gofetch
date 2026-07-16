@@ -104,20 +104,16 @@ func TestResumeClearAndCorrupt(t *testing.T) {
 
 func TestSortByStart(t *testing.T) {
 	got := []Task{{30, 39}, {0, 9}, {20, 29}, {10, 19}}
-	out := sortByStart(got)
-	for i := 0; i < len(out)-1; i++ {
-		if out[i].Start > out[i+1].Start {
-			t.Fatalf("not sorted: %v", out)
+	sortByStart(got)
+	for i := 0; i < len(got)-1; i++ {
+		if got[i].Start > got[i+1].Start {
+			t.Fatalf("not sorted: %v", got)
 		}
 	}
-	// nil in stays nil out
-	if out := sortByStart(nil); out != nil {
-		t.Errorf("nil should stay nil, got %v", out)
-	}
-	// single element
-	if out := sortByStart([]Task{{5, 10}}); len(out) != 1 {
-		t.Errorf("single element: got %v", out)
-	}
+	// nil in stays nil out (no-op, no crash)
+	sortByStart(nil)
+	// single element (no-op, no crash)
+	sortByStart([]Task{{5, 10}})
 }
 
 func TestSaveResumeNoPath(t *testing.T) {

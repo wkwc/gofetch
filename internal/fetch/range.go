@@ -25,7 +25,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	}
 
 	const chunkSize = 1 << 20 // 1 MiB
-	var seeds []Task
+	seeds := make([]Task, 0, (total+chunkSize-1)/chunkSize)
 	for _, gap := range uncompleted(Task{Start: 0, End: total - 1}, completed) {
 		seeds = append(seeds, splitRange(gap.Start, gap.Len(), chunkSize)...)
 	}

@@ -5,6 +5,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -74,13 +75,12 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	d.client = &http.Client{
 		Timeout: opt.Timeout,
 		Transport: &http.Transport{
-			MaxIdleConnsPerHost: opt.WorkerCount + 1,
-			IdleConnTimeout:     90 * time.Second,
-			ForceAttemptHTTP2:   true,
+			IdleConnTimeout:   90 * time.Second,
+			ForceAttemptHTTP2: true,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
-				return fmt.Errorf("too many redirects")
+				return errors.New("too many redirects")
 			}
 			return nil
 		},
@@ -103,7 +103,8 @@ func (d *Downloader) Download(ctx context.Context) error {
 	var completed []Task
 	if d.resumeEnabled {
 		if st, _ := loadResume(d.resumePath, d.url, info.total); st != nil {
-			completed = sortByStart(st.Completed)
+			completed = st.Completed
+			sortByStart(completed)
 		}
 	}
 	if !info.supportsRanges {

@@ -45,7 +45,7 @@ var progressBar = [24]byte{}
 // and clears via ANSI CSI-K.
 func (d *Downloader) printProgress(p *progress, final bool) {
 	done, total := p.snapshot()
-	const w = 24
+	w := len(progressBar)
 	if total <= 0 {
 		if final {
 			fmt.Fprint(os.Stderr, "\r  ? / ?\033[K\n")

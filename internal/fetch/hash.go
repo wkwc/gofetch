@@ -3,6 +3,7 @@ package fetch
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,6 +31,20 @@ func fileHexSHA256(path string) (string, error) {
 // hexEqual compares two hex strings case-insensitively.
 func hexEqual(a, b string) bool {
 	return len(a) == len(b) && strings.EqualFold(a, b)
+}
+
+// ValidateHexSHA256 returns nil if s is a valid 64-character hex string.
+func ValidateHexSHA256(s string) error {
+	if len(s) != sha256.Size*2 {
+		return errors.New("expected 64 hex characters")
+	}
+	for i := range s {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return errors.New("expected 64 hex characters")
+		}
+	}
+	return nil
 }
 
 // verifyFileHash computes the file's SHA-256 and compares against expected.

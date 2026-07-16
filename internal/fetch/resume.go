@@ -72,11 +72,10 @@ func clearResume(path string) {
 }
 
 // sortByStart sorts tasks in-place by Start ascending.
-func sortByStart(tasks []Task) []Task {
+func sortByStart(tasks []Task) {
 	if len(tasks) > 1 {
 		sort.Slice(tasks, func(i, j int) bool { return tasks[i].Start < tasks[j].Start })
 	}
-	return tasks
 }
 
 // dedupTasks merges overlapping or adjacent completed ranges and sorts

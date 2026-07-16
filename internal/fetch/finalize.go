@@ -28,7 +28,7 @@ func (d *Downloader) finalize(f *os.File, prog *progress) error {
 // passed since the last save. Cheap throttle to avoid I/O storms.
 func (d *Downloader) maybeSaveResume(states []*workerState) {
 	last := d.lastResumeSave.Load()
-	if last != 0 && time.Since(time.Unix(0, last)) < time.Second {
+	if last != 0 && time.Duration(time.Now().UnixNano()-last) < time.Second {
 		return
 	}
 	if d.saveResume(collectCompleted(states)) == nil {
@@ -75,7 +75,7 @@ func allocateSparse(path string, size int64, resume bool) (*os.File, error) {
 			f.Close()
 			return nil, err
 		}
-		if info.Size() < size {
+		if info.Size() != size {
 			if err := f.Truncate(size); err != nil {
 				f.Close()
 				return nil, fmt.Errorf("truncate %d: %w", size, err)
