@@ -1,21 +1,57 @@
 package fetch
 
-import "context"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+)
 
 // singleDownload is used when the server does not support Range:
-// one worker streams the entire body at offset 0.
+// one worker streams the entire body at offset 0 without Range headers.
 func (d *Downloader) singleDownload(ctx context.Context, total int64, completed []Task) error {
-	f, err := allocateSparse(d.OutFile, total, d.ResumeEnabled)
+	f, err := allocateSparse(d.outFile, total, d.resumeEnabled)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	prog := newProgress(total)
-	if total > 0 {
-		for _, t := range uncompleted(Task{Start: 0, End: total - 1}, completed) {
-			if err := d.runTask(ctx, nil, t, prog, f); err != nil {
-				return err
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", d.userAgent)
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		drainAndClose(resp.Body)
+		return fmt.Errorf("GET %s: status %d", d.url, resp.StatusCode)
+	}
+	defer drainAndClose(resp.Body)
+
+	buf := acquireBuf(d.bufSize)
+	defer releaseBuf(buf)
+	var cursor int64
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			written, werr := f.WriteAt(buf[:n], cursor)
+			if werr != nil {
+				return werr
 			}
+			cursor += int64(written)
+			prog.add(int64(written))
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			return rerr
 		}
 	}
 	return d.finalize(f, prog)

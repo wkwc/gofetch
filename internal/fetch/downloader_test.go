@@ -98,3 +98,40 @@ func TestMirrorListParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestParseUint(t *testing.T) {
+	tests := []struct {
+		s    string
+		want int64
+		ok   bool
+	}{
+		{"0", 0, true},
+		{"1", 1, true},
+		{"42", 42, true},
+		{"999999999", 999999999, true},
+		{"9223372036854775807", 9223372036854775807, true}, // MaxInt64
+		{"9223372036854775808", 0, false},                   // MaxInt64+1 → overflow
+		{"99999999999999999999", 0, false},                  // way too big
+		{"", 0, false},
+		{"abc", 0, false},
+		{"12abc", 0, false},
+	}
+	for _, tt := range tests {
+		got, err := parseUint(tt.s)
+		if tt.ok && err != nil {
+			t.Errorf("parseUint(%q) error: %v", tt.s, err)
+		} else if !tt.ok && err == nil {
+			t.Errorf("parseUint(%q) = %d, want error", tt.s, got)
+		} else if tt.ok && got != tt.want {
+			t.Errorf("parseUint(%q) = %d, want %d", tt.s, got, tt.want)
+		}
+	}
+}
+
+func TestParseContentRangeOverflow(t *testing.T) {
+	// Server sends a total that overflows int64.
+	_, _, _, ok := parseContentRange("bytes 0-0/99999999999999999999")
+	if ok {
+		t.Error("expected parse failure for overflowing Content-Range total")
+	}
+}

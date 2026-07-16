@@ -6,10 +6,9 @@ resume capability, and integrity verification.
 
 ```
 $ gofetch -w 4 https://proof.ovh.net/files/10Mb.dat
-  #####...................  20.0%  2.0 MB/10485760
-  ####################....  81.8%  8.2 MB/10485760
-  ########################  99.8%  10.0 MB/10485760
-  done: 10Mb.dat
+  #####...................  20.0%  2.0 MB / 10.0 MB
+  ####################....  81.8%  8.2 MB / 10.0 MB
+  ########################  99.8%  10.0 MB / 10.0 MB
 ```
 
 ## Why
@@ -41,9 +40,8 @@ but "parallel curl."
 | **Quiet** | `-q` | Suppress progress bar |
 | **Mirrors** | `-mirrors "u1,u2"` | Comma-separated fallback URLs; fastest healthy one wins |
 | **Hash** | `-hash <hex>` | Expected SHA256 (hex); fails on mismatch |
-| **Sidecar** | `-hash auto` | Fetch hash from `<url>.sha256` |
 | **Resume** | `-resume` (default) | Save `.gofetch.resume` state; resume on restart |
-| **QUIC** | `-quic` (default) | Prefer HTTP/3 (QUIC) when available |
+| **User-Agent** | `-useragent` | Custom User-Agent header (default `gofetch/0.1`) |
 
 ## Usage
 
@@ -55,9 +53,9 @@ gofetch https://example.com/large.bin
 gofetch -w 8 -o model.safetensors -hash 4670af0752b0ee0a571c17eb6923b722e9c557cd26e6b9ec25c2155098f3dc62 \
   https://huggingface.co/.../model.safetensors
 
-# Mirror list + auto sidecar hash + resume
+# Mirror list + resume
 gofetch -mirrors "https://mirror1/file,https://mirror2/file" \
-  -hash auto -resume -o dataset.tar.zst \
+  -resume -o dataset.tar.zst \
   https://primary/file
 ```
 
@@ -70,35 +68,52 @@ is created/updated every 5 seconds with the set of completed byte ranges.
 If the process is killed or crashes, re-run the same command: it reads the state,
 skips the completed ranges, and continues from where it left off.
 
+Completed ranges are deduplicated and merged before saving, so the state file
+stays compact even across many abort/resume cycles.
+
 ## Mirror selection
 
-All mirrors are probed in parallel (HEAD → range GET fallback). The first
-healthy mirror with the lowest 1-byte latency is chosen. If that mirror fails
-mid-download, the next healthy mirror is tried automatically.
+All mirrors (including the primary URL) are probed in parallel (HEAD → range GET fallback).
+The first healthy mirror with the lowest 1-byte latency is chosen.
+
+If a range request returns 200 OK instead of 206 Partial Content (indicating the server
+does not actually support range requests despite advertising it), the download fails
+with a clear error.
 
 ## Integrity
 
 - `-hash <hex>`: verifies SHA256 after download.
-- `-hash auto`: appends `.sha256` to the primary URL, fetches it, and verifies.
-  The sidecar file may contain just the hex hash or `hash  filename` (like `sha256sum` output).
 
-## QUIC / HTTP3
+## Error handling
 
-`-quic` (enabled by default) prefers HTTP/3 via `quic-go` when the server
-advertises `alt-svc: h3`. Falls back transparently to HTTP/2 over TLS.
-No separate TCP fallback flag — if QUIC fails, the mirror failover logic
-handles it.
+- **Transient network errors** (connection reset, unexpected EOF, timeout) are retried
+  with exponential backoff (up to 5 retries per range chunk).
+- **Permanent errors** (invalid URL, unsupported status codes) kill the download immediately.
 
 ## Project layout
 
 ```
 gofetch/
   go.mod
-  cmd/gofetch/main.go                 # CLI entrypoint
-  internal/fetch/downloader.go        # Core downloader (workers, monitor, mirrors, resume, hash)
+  cmd/gofetch/main.go              # CLI entrypoint
+  internal/fetch/
+    downloader.go                  # Core Downloader type and constructor
+    worker.go                      # Worker goroutine, HTTP range requests, error handling
+    monitor.go                     # Work-stealing monitor
+    range.go                       # Parallel range-download orchestration
+    single.go                      # Single-stream fallback (no range support)
+    mirror.go                      # Mirror probing, selection, Content-Range parsing
+    seeds.go                       # Range splitting and gap computation
+    task.go                        # Task struct and lock-free FIFO queue
+    buffer.go                      # sync.Pool buffer recycling
+    progress.go                    # Thread-safe progress tracking and display
+    finalize.go                    # Hash verification, resume save, sparse allocation
+    resume.go                      # Resume state persistence (JSON sidecar)
+    hash.go                        # SHA-256 computation and verification
+    format.go                      # Human-readable byte formatting
 ```
 
-Single binary, stdlib + `github.com/quic-go/quic-go` (for HTTP/3), zero other deps.
+Single binary, zero external dependencies — stdlib only.
 
 ## Design notes
 
@@ -121,17 +136,14 @@ Single binary, stdlib + `github.com/quic-go/quic-go` (for HTTP/3), zero other de
 - Verified byte-equality against `proof.ovh.net/files/10Mb.dat` (10 MiB)
   and `100Mb.dat` (100 MiB) — MD5/SHA256 match.
 - `go vet`, `gofmt`, `go build` clean.
+- Race detector clean (`go test -race`).
 
 ## Limitations
 
-- No retries per se — a failed range goes back to the queue and another
-  worker retries it (but there's no max-retry cap).
 - No proxy support yet.
 - Resume state only stores completed *ranges*; partially written ranges are
   retried from scratch on resume (the file already has those bytes, so it's
   idempotent).
-- Sidecar hash fetch assumes the `.sha256` file is at the same origin.
-- QUIC support depends on `quic-go` (not stdlib yet).
 
 ## License
 

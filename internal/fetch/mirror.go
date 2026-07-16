@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 // drainAndClose discards any remaining bytes and closes the body, so the
 // underlying connection can be reused by http.Transport.
-func drainAndClose(body io.ReadCloser) { io.Copy(io.Discard, body); body.Close() }
+func drainAndClose(body io.ReadCloser) { _, _ = io.Copy(io.Discard, body); body.Close() }
 
 // Mirror represents a download source with its measured latency.
 type Mirror struct {
@@ -30,7 +31,7 @@ type probeInfo struct {
 	etag           string
 }
 
-// selectMirror probes all d.Mirrors in parallel, picks the healthiest,
+// selectMirror probes all d.mirrors in parallel, picks the healthiest,
 // and validates ETag agreement across all healthy mirrors.
 func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, error) {
 	type result struct {
@@ -38,8 +39,9 @@ func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, erro
 		info   probeInfo
 		err    error
 	}
-	ch := make(chan result, len(d.Mirrors))
-	for _, u := range d.Mirrors {
+	all := append([]string{d.url}, d.mirrors...)
+	ch := make(chan result, len(all))
+	for _, u := range all {
 		go func(rawURL string) {
 			m := &Mirror{URL: rawURL}
 			start := time.Now()
@@ -53,7 +55,7 @@ func (d *Downloader) selectMirror(ctx context.Context) (*Mirror, probeInfo, erro
 			ch <- result{m, info, err}
 		}(u)
 	}
-	results := make([]result, len(d.Mirrors))
+	results := make([]result, len(all))
 	for i := range results {
 		results[i] = <-ch
 	}
@@ -100,7 +102,7 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 	if err != nil {
 		return probeInfo{}, false, err
 	}
-	req.Header.Set("User-Agent", d.UserAgent)
+	req.Header.Set("User-Agent", d.userAgent)
 	resp, err := d.client.Do(req)
 	if err != nil {
 		return probeInfo{}, false, err
@@ -126,7 +128,7 @@ func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probe
 		return probeInfo{}, err
 	}
 	req.Header.Set("Range", "bytes=0-0")
-	req.Header.Set("User-Agent", d.UserAgent)
+	req.Header.Set("User-Agent", d.userAgent)
 	resp, err := d.client.Do(req)
 	if err != nil {
 		return probeInfo{}, err
@@ -168,7 +170,7 @@ func parseContentRange(v string) (start, end, total int64, ok bool) {
 }
 
 // parseUint parses a non-empty base-10 unsigned integer.
-// Returns an error on empty input or any non-digit byte.
+// Returns an error on empty input, non-digit byte, or overflow.
 func parseUint(s string) (int64, error) {
 	if s == "" {
 		return 0, errors.New("empty")
@@ -179,7 +181,11 @@ func parseUint(s string) (int64, error) {
 		if c < '0' || c > '9' {
 			return 0, errors.New("non-digit")
 		}
-		n = n*10 + int64(c-'0')
+		d := int64(c - '0')
+		if n > (math.MaxInt64-d)/10 {
+			return 0, errors.New("overflow")
+		}
+		n = n*10 + d
 	}
 	return n, nil
 }

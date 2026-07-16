@@ -28,8 +28,8 @@ func (d *Downloader) saveResume(completed []Task) error {
 		return nil
 	}
 	state := ResumeState{
-		URL: d.URL, OutFile: d.OutFile, TotalSize: d.totalSize,
-		ExpectedSHA256: d.expectedHash, Completed: completed,
+		URL: d.url, OutFile: d.outFile, TotalSize: d.totalSize,
+		ExpectedSHA256: d.expectedHash, Completed: dedupTasks(completed),
 		CreatedAt: d.startTime, UpdatedAt: time.Now(),
 	}
 	data, err := json.Marshal(state)
@@ -77,4 +77,29 @@ func sortByStart(tasks []Task) []Task {
 		sort.Slice(tasks, func(i, j int) bool { return tasks[i].Start < tasks[j].Start })
 	}
 	return tasks
+}
+
+// dedupTasks merges overlapping or adjacent completed ranges and sorts
+// them by Start. This prevents the resume file from growing with
+// redundant entries over repeated abort/resume cycles.
+func dedupTasks(tasks []Task) []Task {
+	if len(tasks) <= 1 {
+		return tasks
+	}
+	sorted := make([]Task, len(tasks))
+	copy(sorted, tasks)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+
+	merged := []Task{sorted[0]}
+	for _, t := range sorted[1:] {
+		last := &merged[len(merged)-1]
+		if t.Start <= last.End+1 {
+			if t.End > last.End {
+				last.End = t.End
+			}
+		} else {
+			merged = append(merged, t)
+		}
+	}
+	return merged
 }

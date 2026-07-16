@@ -2,6 +2,9 @@ package fetch
 
 import (
 	"errors"
+	"io"
+	"os"
+	"syscall"
 	"testing"
 )
 
@@ -49,5 +52,32 @@ func TestReset(t *testing.T) {
 	}
 	if ws.startedAt.Load() == 0 {
 		t.Error("startedAt should be set")
+	}
+}
+
+func TestIsTransient(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"io.EOF", io.EOF, true},
+		{"io.ErrUnexpectedEOF", io.ErrUnexpectedEOF, true},
+		{"ECONNRESET", syscall.ECONNRESET, true},
+		{"ECONNREFUSED", syscall.ECONNREFUSED, true},
+		{"ETIMEDOUT", syscall.ETIMEDOUT, true},
+		{"EPIPE", syscall.EPIPE, true},
+		{"ENOENT", syscall.ENOENT, false},
+		{"EACCES", syscall.EACCES, false},
+		{"os.PathError ENOENT", &os.PathError{Op: "open", Path: "/nope", Err: syscall.ENOENT}, false},
+		{"generic", errors.New("something"), false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTransient(tt.err); got != tt.want {
+				t.Errorf("isTransient(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

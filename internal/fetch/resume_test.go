@@ -13,8 +13,8 @@ func TestResumeStateRoundTrip(t *testing.T) {
 	total := int64(104857600)
 
 	d := &Downloader{
-		URL:          url,
-		OutFile:      outFile,
+		url:          url,
+		outFile:      outFile,
 		totalSize:    total,
 		expectedHash: "deadbeef",
 		resumePath:   resumePath(outFile),
@@ -52,8 +52,8 @@ func TestLoadResumeMismatch(t *testing.T) {
 	path := filepath.Join(dir, "x.gofetch.resume")
 
 	d := &Downloader{
-		URL:        "https://example.com/file",
-		OutFile:    "x",
+		url:        "https://example.com/file",
+		outFile:    "x",
 		totalSize:  1000,
 		resumePath: path,
 	}
@@ -79,8 +79,8 @@ func TestResumeClearAndCorrupt(t *testing.T) {
 	path := filepath.Join(dir, "x.gofetch.resume")
 
 	d := &Downloader{
-		URL:        "https://example.com/file",
-		OutFile:    "x",
+		url:        "https://example.com/file",
+		outFile:    "x",
 		totalSize:  100,
 		resumePath: path,
 	}
@@ -125,5 +125,62 @@ func TestSaveResumeNoPath(t *testing.T) {
 	d := &Downloader{resumePath: ""}
 	if err := d.saveResume([]Task{}); err != nil {
 		t.Errorf("empty resumePath should be no-op: %v", err)
+	}
+}
+
+func TestDedupTasks(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []Task
+		want []Task
+	}{
+		{
+			name: "nil",
+			in:   nil,
+			want: nil,
+		},
+		{
+			name: "single",
+			in:   []Task{{0, 9}},
+			want: []Task{{0, 9}},
+		},
+		{
+			name: "disjoint",
+			in:   []Task{{0, 9}, {20, 29}},
+			want: []Task{{0, 9}, {20, 29}},
+		},
+		{
+			name: "overlapping",
+			in:   []Task{{0, 9}, {5, 15}},
+			want: []Task{{0, 15}},
+		},
+		{
+			name: "adjacent",
+			in:   []Task{{0, 9}, {10, 19}},
+			want: []Task{{0, 19}},
+		},
+		{
+			name: "unsorted overlaps",
+			in:   []Task{{20, 29}, {0, 9}, {10, 19}, {5, 15}},
+			want: []Task{{0, 29}},
+		},
+		{
+			name: "subset",
+			in:   []Task{{0, 99}, {10, 20}, {50, 60}},
+			want: []Task{{0, 99}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dedupTasks(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (%v vs %v)", len(got), len(tt.want), got, tt.want)
+			}
+			for i, w := range tt.want {
+				if got[i] != w {
+					t.Errorf("[%d] = %v, want %v", i, got[i], w)
+				}
+			}
+		})
 	}
 }

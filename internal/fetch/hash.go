@@ -9,6 +9,9 @@ import (
 	"strings"
 )
 
+// hashBufSize is the buffer size used for SHA-256 computation.
+const hashBufSize = 256 * 1024 // 256 KiB
+
 // fileHexSHA256 returns the hex-encoded SHA-256 of the file at path.
 func fileHexSHA256(path string) (string, error) {
 	f, err := os.Open(path)
@@ -17,7 +20,8 @@ func fileHexSHA256(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	buf := make([]byte, hashBufSize)
+	if _, err := io.CopyBuffer(h, f, buf); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

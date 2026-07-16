@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -54,9 +56,27 @@ func (ws *workerState) reset(task Task) {
 	ws.taskGen.Add(1)
 }
 
+// isTransient returns true for network-level errors worth retrying.
+func isTransient(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ETIMEDOUT) {
+		return true
+	}
+	return false
+}
+
 // workerLoop pops tasks from queue, runs them, signals saveC on success.
 // On context cancellation it re-pushes the unfinished portion of the task
-// (skipping when the cancel came from monitor's steal plan).
+// (skipping when the cancel came from monitor's steal plan). Transient
+// network errors are retried with exponential backoff.
 func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, prog *progress, f *os.File, saveC chan<- struct{}) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -75,8 +95,12 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 			}
 			d.requeueUnfinished(ctx, ws, task, queue)
 		case err != nil:
-			ws.setErr(err)
-			return
+			if isTransient(err) {
+				d.requeueUnfinished(ctx, ws, task, queue)
+			} else {
+				ws.setErr(err)
+				return
+			}
 		default:
 			select {
 			case saveC <- struct{}{}:
@@ -128,24 +152,28 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 		ws.reset(task)
 	}
 
-	req, err := http.NewRequestWithContext(rctx, http.MethodGet, d.URL, nil)
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, d.url, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", task.Start, task.End))
-	req.Header.Set("User-Agent", d.UserAgent)
+	req.Header.Set("User-Agent", d.userAgent)
 
 	resp, err := d.client.Do(req)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusOK {
+		drainAndClose(resp.Body)
+		return fmt.Errorf("range %d-%d: server returned 200 OK (does not support range requests)", task.Start, task.End)
+	}
+	if resp.StatusCode != http.StatusPartialContent {
 		drainAndClose(resp.Body)
 		return fmt.Errorf("range %d-%d: status %d", task.Start, task.End, resp.StatusCode)
 	}
 	defer drainAndClose(resp.Body)
 
-	buf := acquireBuf(d.BufSize)
+	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
 	cursor, end := task.Start, task.End
 	for {

@@ -10,7 +10,7 @@ import (
 // It seeds the work queue from ~1 MiB chunks of the uncompleted gaps,
 // runs workers until the queue drains, and signals completion.
 func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed []Task) error {
-	f, err := allocateSparse(d.OutFile, total, d.ResumeEnabled)
+	f, err := allocateSparse(d.outFile, total, d.resumeEnabled)
 	if err != nil {
 		return err
 	}
@@ -32,14 +32,14 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	queue := &Queue{}
 	queue.PushMany(seeds)
 
-	states := make([]*workerState, d.WorkersN)
+	states := make([]*workerState, d.workersN)
 	for i := range states {
 		states[i] = newWorkerState()
 	}
 
 	var workers sync.WaitGroup
-	workers.Add(d.WorkersN)
-	saveC := make(chan struct{}, d.WorkersN)
+	workers.Add(d.workersN)
+	saveC := make(chan struct{}, d.workersN)
 	for _, ws := range states {
 		go func(ws *workerState) {
 			defer workers.Done()

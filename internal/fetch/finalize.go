@@ -15,7 +15,7 @@ func (d *Downloader) finalize(f *os.File, prog *progress) error {
 		if err := f.Sync(); err != nil {
 			return fmt.Errorf("sync: %w", err)
 		}
-		if err := verifyFileHash(d.OutFile, d.expectedHash); err != nil {
+		if err := verifyFileHash(d.outFile, d.expectedHash); err != nil {
 			return err
 		}
 		fmt.Fprint(os.Stderr, "OK\n")

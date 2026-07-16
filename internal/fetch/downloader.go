@@ -15,14 +15,14 @@ import (
 // Downloader drives the parallel download of a single URL (or mirror
 // set) into a single file.
 type Downloader struct {
-	URL           string
-	Mirrors       []string
-	OutFile       string
-	WorkersN      int
-	BufSize       int
-	Timeout       time.Duration
-	UserAgent     string
-	ResumeEnabled bool
+	url           string
+	mirrors       []string
+	outFile       string
+	workersN      int
+	bufSize       int
+	timeout       time.Duration
+	userAgent     string
+	resumeEnabled bool
 
 	client       *http.Client
 	totalSize    int64
@@ -43,6 +43,7 @@ type Options struct {
 	Mirrors        []string
 	ExpectedSHA256 string // hex-encoded SHA-256; empty skips verification
 	Resume         bool
+	UserAgent      string
 }
 
 // NewDownloader constructs a Downloader with sane defaults.
@@ -56,15 +57,19 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	if opt.Timeout <= 0 {
 		opt.Timeout = 30 * time.Second
 	}
+	ua := opt.UserAgent
+	if ua == "" {
+		ua = "gofetch/0.1"
+	}
 	d := &Downloader{
-		URL:           rawURL,
-		Mirrors:       append([]string{rawURL}, opt.Mirrors...),
-		OutFile:       outPath,
-		WorkersN:      opt.WorkerCount,
-		BufSize:       opt.BufSize,
-		Timeout:       opt.Timeout,
-		UserAgent:     "gofetch/0.1",
-		ResumeEnabled: opt.Resume,
+		url:           rawURL,
+		mirrors:       opt.Mirrors,
+		outFile:       outPath,
+		workersN:      opt.WorkerCount,
+		bufSize:       opt.BufSize,
+		timeout:       opt.Timeout,
+		userAgent:     ua,
+		resumeEnabled: opt.Resume,
 		resumePath:    resumePath(outPath),
 		expectedHash:  opt.ExpectedSHA256,
 	}
@@ -85,7 +90,7 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	return d
 }
 
-// Download fetches d.URL (with mirror failover) into d.OutFile.
+// Download fetches d.url (with mirror failover) into d.outFile.
 // Returns nil on success, or the first worker error.
 func (d *Downloader) Download(ctx context.Context) error {
 	d.startTime = time.Now()
@@ -94,12 +99,12 @@ func (d *Downloader) Download(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("mirror: %w", err)
 	}
-	d.URL = mirror.URL
+	d.url = mirror.URL
 	d.totalSize = info.total
 
 	var completed []Task
-	if d.ResumeEnabled {
-		if st, _ := loadResume(d.resumePath, d.URL, info.total); st != nil {
+	if d.resumeEnabled {
+		if st, _ := loadResume(d.resumePath, d.url, info.total); st != nil {
 			completed = sortByStart(st.Completed)
 		}
 	}

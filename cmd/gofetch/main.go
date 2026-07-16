@@ -32,6 +32,7 @@ func run() int {
 		mirrors  = flag.String("mirrors", "", "comma-separated list of mirror URLs")
 		hashFlag = flag.String("hash", "", "expected SHA256 hash (hex) of the file")
 		resume   = flag.Bool("resume", true, "enable resume from .gofetch.resume state file")
+		ua       = flag.String("useragent", "gofetch/0.1", "User-Agent header")
 	)
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: gofetch [options] <url>")
@@ -54,7 +55,7 @@ func run() int {
 		return 1
 	}
 
-	mirrorList := []string{rawURL}
+	var mirrorList []string
 	if *mirrors != "" {
 		for _, m := range strings.Split(*mirrors, ",") {
 			m = strings.TrimSpace(m)
@@ -76,11 +77,6 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if *hashFlag == "auto" {
-		fmt.Fprintln(os.Stderr, "gofetch: -hash auto is not yet implemented; pass an explicit SHA256 hash instead")
-		return 1
-	}
-
 	d := fetch.NewDownloader(rawURL, out, fetch.Options{
 		WorkerCount:    *workers,
 		BufSize:        *bufSize,
@@ -88,6 +84,7 @@ func run() int {
 		Mirrors:        mirrorList,
 		Resume:         *resume,
 		ExpectedSHA256: *hashFlag,
+		UserAgent:      *ua,
 	})
 
 	if err := d.Download(ctx); err != nil {

@@ -37,6 +37,10 @@ func (p *progress) snapshot() (int64, int64) {
 	return p.done, p.total
 }
 
+// progressBar is a reusable buffer for the progress bar display.
+// Allocated once and reused across all printProgress calls.
+var progressBar = [24]byte{}
+
 // printProgress renders the progress bar. Final=true emits a newline
 // and clears via ANSI CSI-K.
 func (d *Downloader) printProgress(p *progress, final bool) {
@@ -50,28 +54,27 @@ func (d *Downloader) printProgress(p *progress, final bool) {
 		}
 		return
 	}
-	pct := clampFloat(float64(done)/float64(total), 0, 1)
+	pct := clamp(float64(done)/float64(total), 0, 1)
 	filled := int(pct*float64(w) + 0.5)
 	if filled > w {
 		filled = w
 	}
-	bar := make([]byte, w)
-	for i := range bar {
+	for i := range progressBar {
 		if i < filled {
-			bar[i] = '#'
+			progressBar[i] = '#'
 		} else {
-			bar[i] = '.'
+			progressBar[i] = '.'
 		}
 	}
 	if final {
-		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s\033[K\n", bar, pct*100, humanBytes(done), humanBytes(total))
+		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s\033[K\n", progressBar[:], pct*100, humanBytes(done), humanBytes(total))
 	} else {
-		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s   ", bar, pct*100, humanBytes(done), humanBytes(total))
+		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s   ", progressBar[:], pct*100, humanBytes(done), humanBytes(total))
 	}
 }
 
-// clampFloat returns v clamped to [lo, hi].
-func clampFloat(v, lo, hi float64) float64 {
+// clamp returns v clamped to [lo, hi].
+func clamp(v, lo, hi float64) float64 {
 	if v < lo {
 		return lo
 	}
