@@ -22,7 +22,8 @@ func splitRange(offset, length, chunkSize int64) []Task {
 }
 
 // uncompleted returns the portions of `full` not covered by `completed`.
-// `completed` may be in any order; it is sorted internally.
+// `completed` may be in any order; it is sorted internally. Malformed
+// entries (Start<0, Start>End, or outside `full`) are skipped.
 func uncompleted(full Task, completed []Task) []Task {
 	if len(completed) == 0 {
 		return []Task{full}
@@ -33,7 +34,7 @@ func uncompleted(full Task, completed []Task) []Task {
 	var out []Task
 	cursor := full.Start
 	for _, c := range sorted {
-		if c.End < full.Start || c.Start > full.End {
+		if c.Start < 0 || c.End < c.Start || c.End < full.Start || c.Start > full.End {
 			continue
 		}
 		if c.Start > cursor {

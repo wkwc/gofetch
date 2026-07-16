@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// drainAndClose discards any remaining bytes and closes the body, so the
+// underlying connection can be reused by http.Transport.
+func drainAndClose(body io.ReadCloser) { io.Copy(io.Discard, body); body.Close() }
 
 // Mirror represents a download source with its measured latency.
 type Mirror struct {
@@ -100,7 +105,7 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 	if err != nil {
 		return probeInfo{}, false, err
 	}
-	resp.Body.Close()
+	drainAndClose(resp.Body)
 	switch {
 	case resp.StatusCode == http.StatusOK:
 		ar := resp.Header.Get("Accept-Ranges")
@@ -123,7 +128,7 @@ func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probe
 	if err != nil {
 		return probeInfo{}, err
 	}
-	resp.Body.Close()
+	drainAndClose(resp.Body)
 	switch resp.StatusCode {
 	case http.StatusPartialContent:
 		_, _, total, ok := parseContentRange(resp.Header.Get("Content-Range"))

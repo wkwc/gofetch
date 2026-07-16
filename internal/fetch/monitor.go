@@ -67,7 +67,7 @@ func (ws *workerState) stealPlan(now time.Time) (Task, context.CancelFunc, bool)
 		return Task{}, nil, false
 	}
 	newStart := t.Start + progressBytes
-	if newStart+stealMinChunk > t.End {
+	if newStart+stealMinChunk > t.End || newStart+stealMinChunk < newStart {
 		return Task{}, nil, false
 	}
 	return Task{Start: newStart, End: t.End}, *cf, true

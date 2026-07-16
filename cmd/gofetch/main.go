@@ -30,7 +30,7 @@ func run() int {
 		outPath  = flag.String("o", "", "output file path (default: basename of URL)")
 		quiet    = flag.Bool("q", false, "suppress progress output")
 		mirrors  = flag.String("mirrors", "", "comma-separated list of mirror URLs")
-		hashFlag = flag.String("hash", "", "expected SHA256 hash (hex) or 'auto' to fetch .sha256 sidecar")
+		hashFlag = flag.String("hash", "", "expected SHA256 hash (hex) of the file")
 		resume   = flag.Bool("resume", true, "enable resume from .gofetch.resume state file")
 	)
 	flag.Usage = func() {
@@ -38,7 +38,7 @@ func run() int {
 		flag.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "\nexamples:")
 		fmt.Fprintln(os.Stderr, "  gofetch -w 8 https://example.com/file.bin")
-		fmt.Fprintln(os.Stderr, "  gofetch -mirrors 'https://a/file,https://b/file' -hash auto -resume -o out.bin")
+		fmt.Fprintln(os.Stderr, "  gofetch -mirrors 'https://a/file,https://b/file' -resume -o out.bin")
 	}
 	flag.Parse()
 
@@ -76,12 +76,9 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var expectedHash string
 	if *hashFlag == "auto" {
-		// TODO: fetch <url>.sha256 and extract hash
-		fmt.Fprintln(os.Stderr, "gofetch: -hash auto not yet implemented; use explicit hex hash")
-	} else if *hashFlag != "" {
-		expectedHash = *hashFlag
+		fmt.Fprintln(os.Stderr, "gofetch: -hash auto is not yet implemented; pass an explicit SHA256 hash instead")
+		return 1
 	}
 
 	d := fetch.NewDownloader(rawURL, out, fetch.Options{
@@ -90,7 +87,7 @@ func run() int {
 		Timeout:        *timeout,
 		Mirrors:        mirrorList,
 		Resume:         *resume,
-		ExpectedSHA256: expectedHash,
+		ExpectedSHA256: *hashFlag,
 	})
 
 	if err := d.Download(ctx); err != nil {

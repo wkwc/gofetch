@@ -65,18 +65,21 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		workers.Wait()
 		stopMonitor()
 		monitorWG.Wait()
-		// Drain any tasks pushed by the monitor after workers exited.
-		for {
-			task, ok := queue.Pop()
-			if !ok {
-				break
-			}
-			if err := d.runTask(context.Background(), nil, task, prog, f); err != nil {
-				// Record the error; main loop will check via states
-				for _, ws := range states {
-					ws.setErr(err)
+		// Drain any tasks pushed by the monitor after workers exited. Skip
+		// if the parent context is already cancelled — the download is
+		// failing, extra bytes won't help.
+		if ctx.Err() == nil {
+			for {
+				task, ok := queue.Pop()
+				if !ok {
+					break
 				}
-				break
+				if err := d.runTask(ctx, nil, task, prog, f); err != nil {
+					for _, ws := range states {
+						ws.setErr(err)
+					}
+					break
+				}
 			}
 		}
 		close(saveC)

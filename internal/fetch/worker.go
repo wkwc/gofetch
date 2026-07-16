@@ -140,10 +140,10 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 		return err
 	}
 	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		drainAndClose(resp.Body)
 		return fmt.Errorf("range %d-%d: status %d", task.Start, task.End, resp.StatusCode)
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp.Body)
 
 	buf := acquireBuf(d.BufSize)
 	defer releaseBuf(buf)
