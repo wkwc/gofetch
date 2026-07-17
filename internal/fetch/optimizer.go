@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"syscall"
 	"time"
 )
 
@@ -107,8 +108,8 @@ func (ac *AutoConfig) Backoff(n int) time.Duration {
 	return d + time.Duration(jitter)
 }
 
-// newAutoTransport builds an http.Transport with TCP keepalive and
-// proxy detection from environment.
+// newAutoTransport builds an http.Transport with TCP keepalive,
+// proxy detection from environment, and optimized socket options.
 func newAutoTransport(ac AutoConfig) *http.Transport {
 	// Match MaxIdleConnsPerHost to the upper bound of Workers so
 	// connection reuse can sustain our peak concurrency.
@@ -120,7 +121,21 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
 			Timeout:   ac.Timeout,
-			KeepAlive: 30 * time.Second,
+			KeepAlive: 10 * time.Second,
+			Control: func(network, address string, c syscall.RawConn) error {
+				return c.Control(func(fd uintptr) {
+					// TCP_NODELAY: disable Nagle's algorithm for lower latency
+					syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, 1)
+					// TCP_FASTOPEN: enable fast open (Linux 4.11+, fallback silently on older kernels)
+					syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, 23, 1) // TCP_FASTOPEN = 23
+					// TCP_NOTSENT_LOWAT: reduce TCP bufferbloat (Linux 4.15+)
+					syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, 0x17, 131072) // TCP_NOTSENT_LOWAT = 0x17
+					// TCP_KEEPIDLE/INTVL/COUNT: faster dead peer detection
+					syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE, 10)
+					syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPINTVL, 3)
+					syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPCNT, 3)
+				})
+			},
 		}).DialContext,
 		ForceAttemptHTTP2:     false, // benchserver is HTTP/1.1; ALPN probe adds RTT
 		MaxIdleConns:          256,
@@ -128,9 +143,8 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: ac.Timeout,
-		// ReadBufferSize=bufSize: matched so requests stick in a single
-		// bufio pass for big chunks, reducing small Read churn.
-		ReadBufferSize: ac.BufSize,
+		ReadBufferSize:        ac.BufSize,
+		WriteBufferSize:       ac.BufSize,
 	}
 }
 
