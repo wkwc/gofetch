@@ -8,6 +8,9 @@ import (
 
 // finalize prints the download summary, verifies hashes, and clears resume state.
 func (d *Downloader) finalize(f fileWriter, prog *progress) error {
+	if prog == nil {
+		prog = newProgress(d.totalSize, nil)
+	}
 	d.printProgress(prog, true)
 
 	if d.quiet && d.expectedHash == "" {
@@ -16,8 +19,10 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 	}
 
 	// Ensure all bytes are on disk before verification.
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync: %w", err)
+	if f != nil {
+		if err := f.Sync(); err != nil {
+			return fmt.Errorf("sync: %w", err)
+		}
 	}
 
 	if d.quiet {

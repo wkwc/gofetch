@@ -10,15 +10,10 @@ import (
 
 // singleDownload is used when the server does not support Range:
 // one worker streams the entire body at offset 0 without Range headers.
-func (d *Downloader) singleDownload(ctx context.Context, total int64, completed []Task) error {
-	f, err := allocateFileWriter(d.outFile, total, d.resumeEnabled)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
+// The file writer f is managed by the caller (already open, will be closed by caller).
+func (d *Downloader) singleDownload(ctx context.Context, total int64, completed []Task, f fileWriter) error {
 	states := []*workerState{newWorkerState()}
-	prog := newProgress(total, states)
+	prog := newProgress(total, []*workerState{states[0]})
 
 	// Pre-fill completed bytes so snapshot returns the right total.
 	var doneBytes int64

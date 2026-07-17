@@ -9,13 +9,8 @@ import (
 // rangeDownload fans the file out across N workers with a stealing monitor.
 // It seeds the work queue from ~1 MiB chunks of the uncompleted gaps,
 // runs workers until the queue drains, and signals completion.
-func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed []Task) error {
-	f, err := allocateFileWriter(d.outFile, total, d.resumeEnabled)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
+// The file writer f is managed by the caller (already open, will be closed by caller).
+func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed []Task, f fileWriter) error {
 	states := make([]*workerState, d.workersN)
 	for i := range states {
 		states[i] = newWorkerState()

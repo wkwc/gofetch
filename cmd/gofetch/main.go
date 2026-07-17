@@ -37,6 +37,7 @@ func run() int {
 		verbose  = flag.Bool("v", false, "verbose logging")
 		hashFlag = flag.String("h", "", "verify integrity (sha256:hex, sha512:hex, auto, or path to .sha256/.sha512 sidecar)")
 		noResume = flag.Bool("no-resume", false, "disable resume (default: on)")
+		mirrorsFlag = flag.String("m", "", "comma-separated list of mirror URLs to try on failure")
 	)
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: gofetch [options] <url>")
@@ -53,6 +54,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "  gofetch -h sha256:abc123... https://example.com/file.bin")
 		fmt.Fprintln(os.Stderr, "  gofetch -q https://example.com/file.bin             # quiet (prints filename only)")
 		fmt.Fprintln(os.Stderr, "  gofetch -v https://example.com/file.bin              # verbose (debug to stderr)")
+		fmt.Fprintln(os.Stderr, "  gofetch -m mirror1,mirror2,mirror3 https://primary.com/file.bin")
 	}
 	flag.Parse()
 
@@ -81,6 +83,14 @@ func run() int {
 		out = base
 	}
 
+	var mirrors []string
+	if *mirrorsFlag != "" {
+		mirrors = strings.Split(*mirrorsFlag, ",")
+		for i := range mirrors {
+			mirrors[i] = strings.TrimSpace(mirrors[i])
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -96,6 +106,7 @@ func run() int {
 		NoResume:     *noResume,
 		Verbose:      *verbose,
 		Quiet:        *quiet,
+		Mirrors:      mirrors,
 	})
 
 	if err := d.Download(ctx); err != nil {

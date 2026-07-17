@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -50,6 +51,8 @@ type progress struct {
 	prevDone  int64
 	prevTime  int64
 	ewmaSpeed float64
+	// preDone tracks bytes completed before workers started (e.g., from resume).
+	preDone atomic.Int64
 }
 
 func newProgress(total int64, states []*workerState) *progress {
@@ -57,11 +60,17 @@ func newProgress(total int64, states []*workerState) *progress {
 	return &progress{total: total, states: states, startTime: now, prevTime: now}
 }
 
+func (p *progress) add(n int64) {
+	p.preDone.Add(n)
+}
+
 func (p *progress) snapshot() (int64, int64) {
 	var sum int64
 	for _, ws := range p.states {
 		sum += ws.bytesDone.Load()
 	}
+	// Add pre-completed bytes
+	sum += p.preDone.Load()
 	if sum > p.total {
 		sum = p.total
 	}
