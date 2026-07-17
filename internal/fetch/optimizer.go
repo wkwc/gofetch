@@ -80,14 +80,15 @@ func scaleWorkers(totalSize int64, cores int) int {
 }
 
 // scaleBufSize picks a buffer size per range request, sized to amortize
-// syscall overhead without wasting memory on tiny files.
+// syscall overhead. Bigger buffers mean fewer syscalls and HTTP round-trips
+// per MiB but use more memory per worker.
 func scaleBufSize(totalSize int64) int {
 	switch {
 	case totalSize <= 0:
 		return 64 * 1024
 	case totalSize < 1<<20: // < 1 MiB: keep small
-		return 16 * 1024
-	case totalSize < 100<<20: // 1 MiB..100 MiB: default
+		return 32 * 1024
+	case totalSize < 100<<20: // 1..100 MiB
 		return 64 * 1024
 	default: // >= 100 MiB: bigger buffers
 		return 256 * 1024

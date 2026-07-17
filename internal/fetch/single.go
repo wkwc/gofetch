@@ -16,7 +16,16 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		return err
 	}
 	defer f.Close()
-	prog := newProgress(total)
+
+	states := []*workerState{newWorkerState()}
+	prog := newProgress(total, states)
+
+	// Pre-fill completed bytes so snapshot returns the right total.
+	var doneBytes int64
+	for _, t := range completed {
+		doneBytes += t.Len()
+	}
+	states[0].bytesDone.Store(doneBytes)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
 	if err != nil {
@@ -36,6 +45,7 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 
 	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
+	ws := states[0]
 	var cursor int64
 	for {
 		n, rerr := resp.Body.Read(buf)
@@ -44,7 +54,12 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 				return werr
 			}
 			cursor += int64(n)
-			prog.add(int64(n))
+			ws.bytesDone.Store(doneBytes + cursor)
+			if d.manifest != nil {
+				if err := d.manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
+					return err
+				}
+			}
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {

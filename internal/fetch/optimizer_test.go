@@ -50,8 +50,8 @@ func TestAutoConfigRetune(t *testing.T) {
 		t.Errorf("Retune(200MB) bufSize = %d, want 256KB", ac.BufSize)
 	}
 	ac.Retune(100) // tiny file
-	if ac.BufSize != 16*1024 {
-		t.Errorf("Retune(100B) bufSize = %d, want 16KB", ac.BufSize)
+	if ac.BufSize != 32*1024 {
+		t.Errorf("Retune(100B) bufSize = %d, want 32KB", ac.BufSize)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestScaleBufSize(t *testing.T) {
 		want int
 	}{
 		{0, 64 * 1024},
-		{1 << 10, 16 * 1024},
+		{1 << 10, 32 * 1024},
 		{1 << 20, 64 * 1024},
 		{99 << 20, 64 * 1024},
 		{200 << 20, 256 * 1024},

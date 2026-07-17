@@ -117,7 +117,7 @@ func chunkKey(task Task) int64 {
 // On context cancellation it re-pushes the unfinished portion of the task
 // (skipping when the cancel came from monitor's steal plan). Transient
 // network errors and HTTP 429/503 are retried with exponential backoff.
-func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, prog *progress, f *os.File, saveC chan<- struct{}) {
+func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, f *os.File, saveC chan<- struct{}) {
 	for {
 		if err := ctx.Err(); err != nil {
 			ws.setErr(err)
@@ -127,7 +127,7 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 		if !ok {
 			return
 		}
-		err := d.runTask(ctx, ws, task, prog, f)
+		err := d.runTask(ctx, ws, task, f)
 		switch {
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			if ws.stealFlag.Swap(false) {
@@ -196,7 +196,7 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 
 // runTask performs the HTTP range request for one task, writing bytes
 // to f. ws may be nil for the single-stream fallback.
-func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, prog *progress, f *os.File) error {
+func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f *os.File) error {
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if ws != nil {
@@ -275,7 +275,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 
 		// On success path: read body. drainAndClose must be called here,
 		// not via defer (defer would accumulate across retry iterations).
-		return d.readBody(rctx, resp, task, prog, f, ws)
+		return d.readBody(rctx, resp, task, f, ws)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, maxHTTPStatusRetries, lastErr)
@@ -285,7 +285,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, pr
 
 // readBody reads the response body into f with chunked writes and
 // optional per-chunk verification. Called once per successful request.
-func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, prog *progress, f *os.File, ws *workerState) error {
+func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f *os.File, ws *workerState) error {
 	defer drainAndClose(resp.Body)
 
 	buf := acquireBuf(d.bufSize)
@@ -305,7 +305,7 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 				return err
 			}
 			cursor += int64(n)
-			prog.add(int64(n))
+			// Progress is derived from ws.bytesDone via progress.snapshot().
 			if ws != nil {
 				ws.bytesDone.Store(cursor - task.Start)
 			}
@@ -327,10 +327,11 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 	}
 }
 
-// bufPool recycles per-worker read buffers. Uses 64 KiB as base size;
-// larger buffers are allocated fresh and not pooled (rare).
+// bufPool recycles per-worker read buffers. Allocates at the largest
+// expected size (256 KiB for files >100 MiB); smaller sizes reuse the
+// same pool by slicing.
 var bufPool = sync.Pool{
-	New: func() any { b := make([]byte, 64*1024); return &b },
+	New: func() any { b := make([]byte, 256*1024); return &b },
 }
 
 // acquireBuf returns a buffer of at least length n, drawing from the pool.
@@ -339,8 +340,7 @@ func acquireBuf(n int) []byte {
 	if cap(*bp) >= n {
 		return (*bp)[:n]
 	}
-	// Pool buffer too small; allocate fresh. Don't return the old one
-	// since it's the wrong size class.
+	// Pool buffer too small; allocate fresh.
 	return make([]byte, n)
 }
 

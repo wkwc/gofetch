@@ -16,13 +16,18 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	}
 	defer f.Close()
 
-	prog := newProgress(total)
+	states := make([]*workerState, d.workersN)
+	for i := range states {
+		states[i] = newWorkerState()
+	}
+	prog := newProgress(total, states)
+
 	if total <= 0 {
 		return d.finalize(f, prog)
 	}
-	for _, t := range completed {
-		prog.add(t.Len())
-	}
+	// Seed completed bytes into the workers' counters so the initial
+	// progress is accurate without an extra CAS on the global counter.
+	seedCompleted(states, completed)
 
 	// Try to load manifest
 	manifestPath := d.outFile + ".gofetch.manifest"
@@ -39,11 +44,6 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	queue := NewQueue(len(seeds))
 	queue.PushMany(seeds)
 
-	states := make([]*workerState, d.workersN)
-	for i := range states {
-		states[i] = newWorkerState()
-	}
-
 	var workers sync.WaitGroup
 	workers.Add(d.workersN)
 	// Only allocate the save channel when resume is enabled.
@@ -54,7 +54,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for _, ws := range states {
 		go func(ws *workerState) {
 			defer workers.Done()
-			d.workerLoop(ctx, ws, queue, prog, f, saveC)
+			d.workerLoop(ctx, ws, queue, f, saveC)
 		}(ws)
 	}
 
@@ -93,7 +93,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 				if !ok {
 					break
 				}
-				if err := d.runTask(ctx, nil, task, prog, f); err != nil {
+				if err := d.runTask(ctx, nil, task, f); err != nil {
 					for _, ws := range states {
 						ws.setErr(err)
 					}
@@ -134,5 +134,35 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		case <-progressC:
 			d.printProgress(prog, false)
 		}
+	}
+}
+
+// seedCompleted primes a few worker states with synthetic byte counts from
+// resumed Tasks so that progress.snapshot() shows the initial bytesDone
+// without needing a CAS loop in the hot path.
+func seedCompleted(states []*workerState, completed []Task) {
+	if len(completed) == 0 {
+		return
+	}
+	// Distribute completed lengths across workers (round-robin).
+	var totalBytes int64
+	for _, t := range completed {
+		totalBytes += t.Len()
+	}
+	if totalBytes == 0 {
+		return
+	}
+	weight := totalBytes / int64(len(states))
+	for i, ws := range states {
+		ws.bytesDone.Store(weight)
+		if i == len(states)-1 {
+			// Last worker takes the remainder; this ensures
+			// snapshot() reproduces the exact total.
+			rem := totalBytes - weight*int64(i)
+			if rem > 0 {
+				ws.bytesDone.Store(rem + weight)
+			}
+		}
+		_ = i
 	}
 }

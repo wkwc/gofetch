@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"time"
 )
 
@@ -42,43 +41,36 @@ func formatFixed2(f float64) string {
 }
 
 // progress tracks total bytes downloaded across all workers.
+// On demand, snapshot sums per-worker bytesDone (cheap — only called
+// ~4 times/sec for the progress bar, plus once at finalize).
 type progress struct {
 	total     int64
-	done      atomic.Int64
+	states    []*workerState
 	startTime int64
 	prevDone  int64
 	prevTime  int64
 	ewmaSpeed float64
 }
 
-func newProgress(total int64) *progress {
+func newProgress(total int64, states []*workerState) *progress {
 	now := time.Now().UnixNano()
-	return &progress{total: total, startTime: now, prevTime: now}
-}
-
-func (p *progress) add(n int64) {
-	for {
-		cur := p.done.Load()
-		remaining := p.total - cur
-		if n > remaining {
-			n = remaining
-		}
-		if n <= 0 {
-			return
-		}
-		if p.done.CompareAndSwap(cur, cur+n) {
-			return
-		}
-	}
+	return &progress{total: total, states: states, startTime: now, prevTime: now}
 }
 
 func (p *progress) snapshot() (int64, int64) {
-	return p.done.Load(), p.total
+	var sum int64
+	for _, ws := range p.states {
+		sum += ws.bytesDone.Load()
+	}
+	if sum > p.total {
+		sum = p.total
+	}
+	return sum, p.total
 }
 
 func (p *progress) speedAndETA() (bytesPerSec float64, eta time.Duration) {
 	now := time.Now().UnixNano()
-	curDone := p.done.Load()
+	curDone, _ := p.snapshot()
 	dt := float64(now-p.prevTime) / float64(time.Second)
 	if dt > 0.5 {
 		dd := float64(curDone - p.prevDone)
