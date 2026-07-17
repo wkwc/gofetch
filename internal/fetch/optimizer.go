@@ -137,7 +137,7 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 				})
 			},
 		}).DialContext,
-		ForceAttemptHTTP2:     false, // benchserver is HTTP/1.1; ALPN probe adds RTT
+		ForceAttemptHTTP2:     true, // Enable HTTP/2 with graceful fallback to HTTP/1.1
 		MaxIdleConns:          256,
 		MaxIdleConnsPerHost:   maxIdlePerHost,
 		IdleConnTimeout:       90 * time.Second,
