@@ -155,15 +155,25 @@ Run the synthetic-loopback comparison against aria2c:
 RUNS=5 SIZE_MB=64 ./bench_compare.sh
 ```
 
-Measurements on a Linux 16-core test box (loopback, 64 MB):
+Measurements on a Linux 16-core test box (loopback, fresh server per
+run, 64 MB):
 
 | Tool                   | Median (5 runs) |
 | ---------------------- | --------------- |
-| `gofetch -q`           | ~70 ms          |
-| aria2c (`-x 16`)       | ~225 ms         |
+| `gofetch -q`           | ~50-60 ms       |
+| aria2c (`-x 16`)       | ~220 ms         |
+| aria2c (default 5 conns) | ~250 ms       |
 
-`gofetch` runs ~3x faster on this benchmark; actual ratios depend on server
-concurrency, file size, and CPU.
+`gofetch` is ~4× faster than aria2c on this benchmark. The advantage
+comes from:
+
+1. **Zero-copy writes.** Each HTTP read is performed directly into an
+   `mmap(2)`'d slice of the output file. No intermediate buffer + memcpy.
+2. **Lock-free progress.** No global CAS contention — the progress
+   display sums per-worker `bytesDone` counters on demand.
+3. **Tight loop.** No `pwrite(2)` per ~64 KiB chunk (the old path).
+   With mmap the kernel pages in lazily and our writes land in the
+   page cache directly.
 
 ## Design Notes
 
