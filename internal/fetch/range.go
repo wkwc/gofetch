@@ -10,7 +10,7 @@ import (
 // It seeds the work queue from ~1 MiB chunks of the uncompleted gaps,
 // runs workers until the queue drains, and signals completion.
 func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed []Task) error {
-	f, err := allocateSparse(d.outFile, total, d.resumeEnabled)
+	f, err := allocateFileWriter(d.outFile, total, d.resumeEnabled)
 	if err != nil {
 		return err
 	}

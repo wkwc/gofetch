@@ -7,7 +7,7 @@ import (
 )
 
 // finalize prints the download summary, verifies hashes, and clears resume state.
-func (d *Downloader) finalize(f *os.File, prog *progress) error {
+func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 	d.printProgress(prog, true)
 
 	if d.quiet && d.expectedHash == "" {
@@ -15,8 +15,7 @@ func (d *Downloader) finalize(f *os.File, prog *progress) error {
 		return nil
 	}
 
-	// Ensure all bytes are on disk before verification (or before
-	// resumable exit in quiet mode).
+	// Ensure all bytes are on disk before verification.
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}

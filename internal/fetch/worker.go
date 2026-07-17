@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -115,7 +114,7 @@ func parseRetryAfter(h http.Header) time.Duration {
 // On context cancellation it re-pushes the unfinished portion of the task
 // (skipping when the cancel came from monitor's steal plan). Transient
 // network errors and HTTP 429/503 are retried with exponential backoff.
-func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, f *os.File, saveC chan<- struct{}) {
+func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, f fileWriter, saveC chan<- struct{}) {
 	for {
 		if err := ctx.Err(); err != nil {
 			ws.setErr(err)
@@ -194,7 +193,7 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 
 // runTask performs the HTTP range request for one task, writing bytes
 // to f. ws may be nil for the single-stream fallback.
-func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f *os.File) error {
+func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f fileWriter) error {
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if ws != nil {
@@ -283,7 +282,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 
 // readBody reads the response body into f with chunked writes and
 // optional per-chunk verification. Called once per successful request.
-func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f *os.File, ws *workerState) error {
+func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f fileWriter, ws *workerState) error {
 	defer drainAndClose(resp.Body)
 
 	buf := acquireBuf(d.bufSize)

@@ -11,7 +11,7 @@ import (
 // singleDownload is used when the server does not support Range:
 // one worker streams the entire body at offset 0 without Range headers.
 func (d *Downloader) singleDownload(ctx context.Context, total int64, completed []Task) error {
-	f, err := allocateSparse(d.outFile, total, d.resumeEnabled)
+	f, err := allocateFileWriter(d.outFile, total, d.resumeEnabled)
 	if err != nil {
 		return err
 	}
