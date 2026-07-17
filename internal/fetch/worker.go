@@ -285,6 +285,15 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f fileWriter, ws *workerState) error {
 	defer drainAndClose(resp.Body)
 
+	// If the writer exposes the underlying bytes (mmap) and the slice
+	// is non-empty, we go zero-copy. Slice being nil indicates a
+	// fallback (raw pwrite) — we use the buffered path there.
+	if wb, ok := f.(mmapWriterBytes); ok {
+		if data := wb.Bytes(); data != nil {
+			return d.readBodyDirect(resp, task, wb, ws, data)
+		}
+	}
+
 	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
 	cursor, end := task.Start, task.End
@@ -318,6 +327,56 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 		}
 		if cursor > end {
 			return nil
+		}
+	}
+}
+
+// readBodyDirect is the zero-copy path: it reads HTTP response bytes
+// directly into the mmap'd output slice at task.Start, skipping the
+// intermediate buffer+memcpy. Each Read goes into the next free chunk
+// of the task's mmap window.
+func (d *Downloader) readBodyDirect(resp *http.Response, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
+	if task.End+1 > int64(len(data)) {
+		return fmt.Errorf("mmap slice short: end=%d len=%d", task.End, len(data))
+	}
+	taskStart := task.Start
+	taskSize := task.End - taskStart + 1
+	bufCap := int64(d.bufSize)
+	manifest := d.manifest
+	cursor := int64(0)
+	for {
+		remaining := taskSize - cursor
+		if remaining <= 0 {
+			return nil
+		}
+		// Read into the slice at the next free offset. Slice at this
+		// position is unused bytes — the tail of buf carries previous
+		// bytes, but we only consume n bytes after each Read so those
+		// are correctly placed.
+		sliceLen := bufCap
+		if sliceLen > remaining {
+			sliceLen = remaining
+		}
+		buf := data[taskStart+cursor : taskStart+cursor+sliceLen]
+
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			cursor += int64(n)
+			if ws != nil {
+				ws.bytesDone.Store(cursor)
+			}
+			if manifest != nil {
+				if err := manifest.VerifyChunk(
+					taskStart+cursor-int64(n), taskStart+cursor-1, buf[:n]); err != nil {
+					return err
+				}
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return rerr
 		}
 	}
 }

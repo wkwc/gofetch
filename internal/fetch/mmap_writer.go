@@ -29,6 +29,17 @@ func (r *rawFileWriter) Sync() error { return r.F.Sync() }
 // Close delegates to F.Close.
 func (r *rawFileWriter) Close() error { return r.F.Close() }
 
+// Bytes returns nil for raw writers — the generic Read→buffer→write path
+// is used. The mmap path exposes real bytes for direct reads.
+func (r *rawFileWriter) Bytes() []byte { return nil }
+
+// mmapWriterBytes is the interface to access the mmap'd slice. Workers
+// type-assert to this to skip the memcpy step.
+type mmapWriterBytes interface {
+	fileWriter
+	Bytes() []byte
+}
+
 // mmapWriter writes to a memory-mapped file. This is the fast path:
 // bytes flow into the page cache via memcpy with no per-buffer syscall.
 type mmapWriter struct {
@@ -57,6 +68,10 @@ func newMmapWriter(path string, size int64) (*mmapWriter, error) {
 		fd.Close()
 		return nil, fmt.Errorf("mmap: %w", err)
 	}
+	// Hint the kernel we'll access the bytes sequentially. This avoids
+	// the reader-side readahead state machine being initialized for a
+	// memory region we'll only write to.
+	_ = hintMmapSequential(data)
 	return &mmapWriter{fd: fd, data: data, size: size}, nil
 }
 
@@ -69,6 +84,11 @@ func (m *mmapWriter) WriteAt(buf []byte, off int64) (int, error) {
 	copy(m.data[off:], buf)
 	return len(buf), nil
 }
+
+// Bytes returns the underlying mmap-d byte slice. Workers can directly
+// read responses into this slice at the correct offset, avoiding one
+// memcpy per chunk. Returns nil for non-mmap writers.
+func (m *mmapWriter) Bytes() []byte { return m.data }
 
 // Sync flushes dirty mmap pages via the underlying fd. Note: mmap MAP_SHARED
 // pages are also auto-flushed to the page cache on memcpy; Sync() ensures
