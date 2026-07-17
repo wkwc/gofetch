@@ -333,32 +333,27 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 
 // readBodyDirect is the zero-copy path: it reads HTTP response bytes
 // directly into the mmap'd output slice at task.Start, skipping the
-// intermediate buffer+memcpy. Each Read goes into the next free chunk
-// of the task's mmap window.
+// intermediate buffer+memcpy.
 func (d *Downloader) readBodyDirect(resp *http.Response, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
-	if task.End+1 > int64(len(data)) {
-		return fmt.Errorf("mmap slice short: end=%d len=%d", task.End, len(data))
+	taskEnd := task.End
+	if taskEnd+1 > int64(len(data)) {
+		return fmt.Errorf("mmap slice short: end=%d len=%d", taskEnd, len(data))
 	}
 	taskStart := task.Start
-	taskSize := task.End - taskStart + 1
+	taskSize := taskEnd - taskStart + 1
 	bufCap := int64(d.bufSize)
-	manifest := d.manifest
+	manifest := d.manifest // hoist out
 	cursor := int64(0)
 	for {
 		remaining := taskSize - cursor
 		if remaining <= 0 {
 			return nil
 		}
-		// Read into the slice at the next free offset. Slice at this
-		// position is unused bytes — the tail of buf carries previous
-		// bytes, but we only consume n bytes after each Read so those
-		// are correctly placed.
-		sliceLen := bufCap
-		if sliceLen > remaining {
-			sliceLen = remaining
+		want := bufCap
+		if want > remaining {
+			want = remaining
 		}
-		buf := data[taskStart+cursor : taskStart+cursor+sliceLen]
-
+		buf := data[taskStart+cursor : taskStart+cursor+want]
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
 			cursor += int64(n)
