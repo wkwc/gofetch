@@ -94,6 +94,6 @@ func DecompressToFile(r io.Reader, w io.Writer, encoding string) (int64, error) 
 	}
 }
 
-func isGzip(e string) bool   { return e == "gzip" || e == "x-gzip" }
-func isZstd(e string) bool   { return e == "zstd" }
-func isXz(e string) bool     { return e == "xz" || e == "lzma" }
+func isGzip(e string) bool { return e == "gzip" || e == "x-gzip" }
+func isZstd(e string) bool { return e == "zstd" }
+func isXz(e string) bool   { return e == "xz" || e == "lzma" }
