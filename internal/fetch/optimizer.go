@@ -122,12 +122,15 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 			Timeout:   ac.Timeout,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false, // benchserver is HTTP/1.1; ALPN probe adds RTT
 		MaxIdleConns:          256,
 		MaxIdleConnsPerHost:   maxIdlePerHost,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ResponseHeaderTimeout: ac.Timeout,
+		// ReadBufferSize=bufSize: matched so requests stick in a single
+		// bufio pass for big chunks, reducing small Read churn.
+		ReadBufferSize: ac.BufSize,
 	}
 }
 
