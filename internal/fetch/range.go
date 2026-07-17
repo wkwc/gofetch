@@ -144,7 +144,6 @@ func seedCompleted(states []*workerState, completed []Task) {
 	if len(completed) == 0 {
 		return
 	}
-	// Distribute completed lengths across workers (round-robin).
 	var totalBytes int64
 	for _, t := range completed {
 		totalBytes += t.Len()
@@ -152,17 +151,16 @@ func seedCompleted(states []*workerState, completed []Task) {
 	if totalBytes == 0 {
 		return
 	}
-	weight := totalBytes / int64(len(states))
+	// Spread completed bytes roughly evenly across workers. The last
+	// worker absorbs any remainder so snapshot() reproduces totalBytes.
+	n := int64(len(states))
 	for i, ws := range states {
-		ws.bytesDone.Store(weight)
+		v := totalBytes / n
 		if i == len(states)-1 {
-			// Last worker takes the remainder; this ensures
-			// snapshot() reproduces the exact total.
-			rem := totalBytes - weight*int64(i)
-			if rem > 0 {
-				ws.bytesDone.Store(rem + weight)
-			}
+			v = totalBytes - v*(n-1)
 		}
-		_ = i
+		if v > 0 {
+			ws.bytesDone.Store(v)
+		}
 	}
 }

@@ -105,13 +105,11 @@ func parseRetryAfter(h http.Header) time.Duration {
 	return 5 * time.Second
 }
 
-// chunkKey returns a stable identifier for a chunk across all retries and
-// steals. Two Tasks belong to the same logical chunk iff their End offsets
-// match the original seeded End. This survives partial downloads and steals
-// (which preserve End) so that retry accounting accumulates correctly.
-func chunkKey(task Task) int64 {
-	return task.End
-}
+// chunkKey used to be a helper; inlined for hot-path inlining and
+// less abstraction. Two Tasks belong to the same logical chunk iff
+// their End offsets match the original seeded End. This survives
+// partial downloads and steals (which preserve End) so that retry
+// accounting accumulates correctly.
 
 // workerLoop pops tasks from queue, runs them, signals saveC on success.
 // On context cancellation it re-pushes the unfinished portion of the task
@@ -162,7 +160,7 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 	if remaining.Start >= remaining.End {
 		return
 	}
-	key := chunkKey(task) // stable identity = original chunk's End
+	key := task.End // stable identity = original chunk's End (was chunkKey)
 	d.retryMu.Lock()
 	if d.retryCount == nil {
 		d.retryCount = make(map[int64]int)
@@ -295,11 +293,9 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 	for {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
+			// Clamp n to remaining bytes; last partial read from server.
 			if remaining := end - cursor + 1; int64(n) > remaining {
 				n = int(remaining)
-				if n <= 0 {
-					return nil
-				}
 			}
 			if _, err := f.WriteAt(buf[:n], cursor); err != nil {
 				return err
