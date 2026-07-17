@@ -272,7 +272,13 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 
 		// On success path: read body. drainAndClose must be called here,
 		// not via defer (defer would accumulate across retry iterations).
-		return d.readBody(rctx, resp, task, f, ws)
+		// Wrap response body with decompressor if Content-Encoding is present.
+		encoding := resp.Header.Get("Content-Encoding")
+		var body io.ReadCloser = resp.Body
+		if body != nil && (encoding == "gzip" || encoding == "x-gzip" || encoding == "zstd" || encoding == "xz" || encoding == "lzma") {
+			body, _ = DecompressReader(body, encoding)
+		}
+		return d.readBody(rctx, resp, task, f, ws, body)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, maxHTTPStatusRetries, lastErr)
@@ -281,9 +287,10 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 }
 
 // readBody reads the response body into f with chunked writes and
-// optional per-chunk verification. Called once per successful request.
-func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f fileWriter, ws *workerState) error {
-	defer drainAndClose(resp.Body)
+// optional per-chunk verification.
+// body is the response body (potentially decompressed).
+func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f fileWriter, ws *workerState, body io.ReadCloser) error {
+	defer drainAndClose(body)
 
 	// If the writer exposes the underlying bytes (mmap) and the slice
 	// is non-empty, we go zero-copy. Slice being nil indicates a
@@ -299,7 +306,7 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 	cursor, end := task.Start, task.End
 	manifest := d.manifest // hoist out of per-Read hot loop
 	for {
-		n, rerr := resp.Body.Read(buf)
+		n, rerr := body.Read(buf)
 		if n > 0 {
 			// Clamp n to remaining bytes; last partial read from server.
 			if remaining := end - cursor + 1; int64(n) > remaining {

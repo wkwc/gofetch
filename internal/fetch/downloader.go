@@ -138,16 +138,16 @@ func (d *Downloader) Download(ctx context.Context) error {
 			}
 		}
 
-d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
+		d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
 
-	if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
-		err = d.singleDownload(ctx, info.total, nil, f)
-	} else {
-		err = d.rangeDownload(ctx, info.total, nil, f)
-	}
+		if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
+			err = d.singleDownload(ctx, info.total, nil, f)
+		} else {
+			err = d.rangeDownload(ctx, info.total, nil, f)
+		}
 
 		if err == nil {
-			d.url = urls[0] // restore original URL for finalize
+			d.url = urls[0]             // restore original URL for finalize
 			return d.finalize(nil, nil) // file already closed in download funcs
 		}
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, urls[i], err)

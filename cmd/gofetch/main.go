@@ -32,11 +32,11 @@ func main() {
 
 func run() int {
 	var (
-		outPath  = flag.String("o", "", "output file path (default: basename of URL)")
-		quiet    = flag.Bool("q", false, "suppress progress output")
-		verbose  = flag.Bool("v", false, "verbose logging")
-		hashFlag = flag.String("h", "", "verify integrity (sha256:hex, sha512:hex, auto, or path to .sha256/.sha512 sidecar)")
-		noResume = flag.Bool("no-resume", false, "disable resume (default: on)")
+		outPath     = flag.String("o", "", "output file path (default: basename of URL)")
+		quiet       = flag.Bool("q", false, "suppress progress output")
+		verbose     = flag.Bool("v", false, "verbose logging")
+		hashFlag    = flag.String("h", "", "verify integrity (sha256:hex, sha512:hex, auto, or path to .sha256/.sha512 sidecar)")
+		noResume    = flag.Bool("no-resume", false, "disable resume (default: on)")
 		mirrorsFlag = flag.String("m", "", "comma-separated list of mirror URLs to try on failure")
 	)
 	flag.Usage = func() {
