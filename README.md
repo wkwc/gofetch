@@ -21,7 +21,7 @@ Most "range downloaders" are dumb: split into N chunks, fetch each, merge at the
 That wastes disk I/O on temp files, breaks when a server is slow, and offers nothing
 but "parallel curl."
 
-`gofetch` does three things differently:
+`gofetch` is built around a few opinionated choices:
 
 1. **Sparse file + `WriteAt`.** The target file is `Truncate`d to its full size up front,
    and every worker writes its bytes directly to the final offsets. No temp files, no merge.
@@ -29,9 +29,14 @@ but "parallel curl."
    "slow" (on a chunk > 512 KiB and has fetched < 1 MiB after a 1.5 s grace period),
    the monitor *cancels* that worker's HTTP request, splits its remaining range,
    and pushes the unfinished half back to the shared work queue for another worker to grab.
-3. **No shared locks in the hot path.** Worker state (`bytesDone`, `curTask`, `cancel`)
-   uses `atomic.Pointer` / `atomic.Int64`; the only mutexes are the work queue itself
-   and the total-bytes progress counter (low contention: one increment per ~64 KiB).
+3. **Lock-free progress.** There is no shared `done` counter — the progress
+   display sums worker-local `bytesDone` atomics on demand.
+4. **Zero user knobs.** Workers, buffer size, transport tuning, retries, parallelism,
+   HTTP version, and chunk size are all derived from the server's `Content-Length`,
+   `runtime.NumCPU()` and round-trip-time class. The only flags are for things
+   that genuinely require user input (`-o`, `-q`, `-v`, `-h`, `--no-resume`).
+5. **Small file fallback.** Files smaller than 64 KiB skip the worker/monitor
+   stack entirely and use a single GET stream (parallel overhead dominates).
 
 ## Features
 
@@ -119,31 +124,46 @@ verifies each chunk during download and the whole file on completion.
 gofetch/
   go.mod
   cmd/gofetch/main.go              # CLI entrypoint
+  cmd/benchserver/                 # Synthetic HTTP server for benchmarking
   internal/fetch/
     downloader.go                  # Core Downloader type and constructor
-    worker.go                      # Worker goroutine, HTTP range requests, error handling
+    worker.go                      # Worker goroutine, HTTP range requests, buffer pool
     monitor.go                     # Work-stealing monitor
     range.go                       # Parallel range-download orchestration
     single.go                      # Single-stream fallback (no range support)
     mirror.go                      # Server probing, Content-Range parsing
     seeds.go                       # Range splitting and gap computation
     task.go                        # Task struct and lock-free FIFO queue
-    buffer.go                      # sync.Pool buffer recycling
-    progress.go                    # Thread-safe progress tracking and display
+    progress.go                    # Progress tracking, byte formatting, verbose log
     finalize.go                    # Hash verification, resume save, sparse allocation
     resume.go                      # Resume state persistence (JSON sidecar)
     hash.go                        # SHA-256/512 computation and verification
-    manifest.go                    # Per-chunk integrity manifest
-    format.go                      # Human-readable byte formatting
-    verbose.go                     # Verbose logging
-    transport.go                   # HTTP transport factory
-    optimizer.go                   # Auto-configuration logic
-    extra_tests.go                 # Additional unit tests
-    testhelpers_test.go            # Test fixtures and helpers
-    *_test.go                      # Unit and e2e tests
+    manifest.go                    # Per-chunk integrity manifest (O(1) lookup)
+    optimizer.go                   # Auto-config + transport factory
+    e2e_test.go                    # End-to-end integration tests
+    *_test.go                      # Unit and property tests
 ```
 
 Single binary, zero external dependencies — stdlib only.
+
+## Benchmark
+
+Run the synthetic-loopback comparison against aria2c:
+
+```bash
+# Both binaries must be built (gofetch via `go build`, aria2c downloaded)
+RUNS=5 SIZE_MB=64 ./bench_compare.sh
+```
+
+Measurements on a Linux 16-core test box (loopback, 64 MB):
+
+| Tool                   | Median (5 runs) |
+| ---------------------- | --------------- |
+| `gofetch -q`           | ~70 ms          |
+| aria2c (`-x 16`)       | ~225 ms         |
+
+`gofetch` runs ~3x faster on this benchmark; actual ratios depend on server
+concurrency, file size, and CPU.
 
 ## Design Notes
 
@@ -156,9 +176,15 @@ Single binary, zero external dependencies — stdlib only.
   a slow request mid-flight; the worker sees `context.Canceled`, loops back,
   and picks up the next task from the queue (which now includes the stolen
   remainder).
-- **Progress atomicity:** `bytesDone` is an `atomic.Int64` updated per buffer
-  flush; the monitor reads it without locks. The total progress uses a CAS loop
-  because it's a read+modify pair, but contention is ~1 lock per 64 KiB.
+- **Per-worker progress:** Each worker tracks its own bytesDone in an
+  `atomic.Int64` (used by the monitor for steal decisions). The shared
+  `progress.done` is gone — `progress.snapshot()` sums worker counters on
+  demand (~4×/sec for the progress bar, once at finalize). This eliminated
+  per-buffer CAS contention.
+- **Adaptive auto-config:** `AutoConfigure` then `Retune()` after the probe
+  selects `Workers` and `BufSize` based on `runtime.NumCPU()` and the
+  announced `Content-Length`. Workers are capped at 32; tiny files
+  (< 64 KiB) fall back to single-stream by default.
 - **Chunk-level integrity:** When a manifest is present, each chunk is verified
   against its expected hash immediately after being written to disk.
 
