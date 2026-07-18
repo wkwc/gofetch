@@ -112,15 +112,26 @@ func (d *Downloader) maybeSaveResume(states []*workerState) {
 }
 
 // collectCompleted gathers all fully-completed, non-stolen ranges.
+// A `Task` is reported as completed only if `taskGen` matches a
+// generation we observed *with* its `bytesDone`, so a worker that has
+// already `reset()` to a new task is correctly skipped. A bare double
+// `Load()` of the task pointer is insufficient — `reset()` swaps the
+// pointer before incrementing the generation, so the pointer can
+// match even though the underlying assignment is to a new Task.
 func collectCompleted(states []*workerState) []Task {
 	var out []Task
 	for _, ws := range states {
+		gen := ws.taskGen.Load()
 		t := ws.curTask.Load()
 		if t == nil {
 			continue
 		}
 		done := ws.bytesDone.Load()
-		if ws.curTask.Load() != t {
+		// Re-check taskGen: if a worker `reset()` between our
+		// snapshot and use, the bytesDone we observed belongs to
+		// the prior task and is not safe to publish as the new
+		// task's progress.
+		if ws.taskGen.Load() != gen {
 			continue
 		}
 		if done >= t.Len() && !ws.stealFlag.Load() {
