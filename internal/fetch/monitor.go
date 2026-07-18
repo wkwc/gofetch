@@ -17,6 +17,13 @@ const (
 // moved enough bytes within the grace period, it cancels the worker's
 // in-flight HTTP request and pushes the unfinished portion back to the
 // queue so another worker retries from where that one left off.
+//
+// Note on the steal/commit race: between `cancel()` and `queue.Push()`,
+// the worker may have written additional bytes (cancelled requests
+// still flush their in-flight read). That's harmless — the new worker
+// picking up the leftover will start from the recorded offset and
+// our own worker observes `cancelFn = nil` after the cancel returns,
+// preventing a second cancel from this monitor loop.
 func (d *Downloader) monitor(ctx context.Context, states []*workerState, queue *Queue) {
 	t := time.NewTicker(monitorInterval)
 	defer t.Stop()
@@ -32,6 +39,10 @@ func (d *Downloader) monitor(ctx context.Context, states []*workerState, queue *
 			if !yes {
 				continue
 			}
+			// Mark stealing before pull/queue to make the worker's
+			// `requeueUnfinished` skip this range — otherwise we end
+			// up with two pushers of overlapping ranges onto the
+			// same queue slot.
 			ws.stealFlag.Store(true)
 			cancel()
 			queue.Push(leftover)
@@ -41,6 +52,11 @@ func (d *Downloader) monitor(ctx context.Context, states []*workerState, queue *
 
 // stealPlan checks if ws is a candidate for work stealing.
 // ok=false means no steal (idle, too small, not slow enough).
+//
+// All ws reads are guarded by the taskGen sentinel: a worker that
+// finishes the current task and starts a new task via reset() will
+// increment taskGen; the post-snapshot re-check ensures we never
+// publish progress that belongs to a Task we've already discarded.
 func (ws *workerState) stealPlan(now time.Time) (Task, context.CancelFunc, bool) {
 	t := ws.curTask.Load()
 	if t == nil {
@@ -67,6 +83,12 @@ func (ws *workerState) stealPlan(now time.Time) (Task, context.CancelFunc, bool)
 	}
 	newStart := t.Start + progressBytes
 	if newStart+stealMinChunk > t.End || newStart+stealMinChunk < newStart {
+		return Task{}, nil, false
+	}
+	// Skip if we've already stolen from this worker — the worker may
+	// still be backing off on its in-flight rerr when we observe it
+	// and would otherwise race-publish multiple leftover chunks.
+	if ws.stealFlag.Load() {
 		return Task{}, nil, false
 	}
 	return Task{Start: newStart, End: t.End}, *cf, true

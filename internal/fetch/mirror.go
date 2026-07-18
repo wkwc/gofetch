@@ -78,7 +78,15 @@ func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probe
 	case http.StatusPartialContent:
 		_, _, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
 		if !ok {
-			return probeInfo{}, errors.New("malformed Content-Range")
+			// 206 with a malformed Content-Range — some servers (esp.
+			// proxies) return a malformed range header even when
+			// Content-Length is sound. Fall back to Content-Length
+			// and disable range support for this server rather than
+			// hard-failing a download we could otherwise complete.
+			if cl := resp.ContentLength; cl > 0 {
+				return probeInfo{supportsRanges: false, total: cl}, nil
+			}
+			return probeInfo{}, errors.New("malformed Content-Range and no Content-Length")
 		}
 		return probeInfo{supportsRanges: true, total: total}, nil
 	case http.StatusOK:
