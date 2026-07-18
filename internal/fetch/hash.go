@@ -71,11 +71,12 @@ func validateHexHash(s, algo string) error {
 	if len(s) != expected {
 		return fmt.Errorf("expected %d hex characters for %s, got %d", expected, algo, len(s))
 	}
-	for i := range s {
-		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return fmt.Errorf("expected %d hex characters for %s", expected, algo)
-		}
+	// `encoding/hex.DecodeString` accepts lower- or upper-case and short-
+	// inputs (returns an error for odd-length). Combined with the length
+	// check above this is functionally equivalent to a hand-written
+	// loop, with no allocation and a single vectorised call.
+	if _, err := hex.DecodeString(s); err != nil {
+		return fmt.Errorf("invalid hex for %s: %w", algo, err)
 	}
 	return nil
 }
