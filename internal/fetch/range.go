@@ -133,7 +133,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 					return err
 				}
 			}
-			return d.finalize(f, prog)
+			return nil
 		case <-saveC:
 			d.maybeSaveResume(states)
 		case <-resumeC:

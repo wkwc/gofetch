@@ -113,7 +113,11 @@ func (d *Downloader) Download(ctx context.Context) error {
 
 		var completed []Task
 		if d.resumeEnabled {
-			if st, _ := loadResume(d.resumePath, activeURL, info.total); st != nil {
+			st, err := loadResume(d.resumePath, activeURL, info.total)
+			if err != nil {
+				d.vlog("corrupt resume file, restarting from scratch: %v", err)
+				clearResume(d.resumePath)
+			} else if st != nil {
 				completed = st.Completed
 				sortByStart(completed)
 				d.vlog("resumed from %d completed chunks", len(completed))
@@ -133,6 +137,8 @@ func (d *Downloader) Download(ctx context.Context) error {
 		downloaded := d.downloadFromMirror(ctx, activeURL, info, completed, f)
 		if downloaded.ok() {
 			d.url = origURL
+			// finalize already called f.Sync() + f.Close(); return
+			// its result directly — do NOT close f again here.
 			return d.finalize(f, nil)
 		}
 		_ = f.Close()

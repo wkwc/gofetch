@@ -33,6 +33,9 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 		if err := f.Sync(); err != nil {
 			return fmt.Errorf("sync: %w", err)
 		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close: %w", err)
+		}
 	}
 
 	if d.quiet {
