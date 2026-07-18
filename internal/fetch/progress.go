@@ -77,6 +77,9 @@ func (p *progress) snapshot() (int64, int64) {
 	return sum, p.total
 }
 
+// speedAndETA computes the current EWMA download speed and estimated
+// time remaining. NOT goroutine-safe: must be called only from
+// printProgress (the main goroutine).
 func (p *progress) speedAndETA() (bytesPerSec float64, eta time.Duration) {
 	now := time.Now().UnixNano()
 	curDone, _ := p.snapshot()

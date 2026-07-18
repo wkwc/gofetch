@@ -1,11 +1,11 @@
 package fetch
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,7 +58,7 @@ func parseRangeFast(h string) (int, int) {
 		return 0, 0
 	}
 	s := h[len(p):]
-	dash := bytes.IndexByte([]byte(s), '-')
+	dash := strings.IndexByte(s, '-')
 	if dash < 1 || dash >= len(s)-1 {
 		return 0, 0
 	}

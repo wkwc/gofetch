@@ -146,7 +146,7 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 
 func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, task Task, queue *Queue) {
 	remaining := Task{Start: task.Start + ws.bytesDone.Load(), End: task.End}
-	if remaining.Start >= remaining.End {
+	if remaining.Start > remaining.End {
 		return
 	}
 	key := task.End

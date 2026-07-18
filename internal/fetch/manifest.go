@@ -44,6 +44,16 @@ func LoadManifest(path string) (*Manifest, error) {
 	if m.Algo == "" {
 		m.Algo = "sha256"
 	}
+	// Validate chunk geometry: discard any chunk where End < Start.
+	// A corrupt manifest with inverted ranges would cause integer
+	// underflow in VerifyFull, leading to near-infinite read loops.
+	valid := m.Chunks[:0]
+	for _, c := range m.Chunks {
+		if c.End >= c.Start {
+			valid = append(valid, c)
+		}
+	}
+	m.Chunks = valid
 	m.buildIndex()
 	return &m, nil
 }
