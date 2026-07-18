@@ -185,18 +185,18 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if ws != nil {
+		ws.reset(task)
 		cf := context.CancelFunc(cancel)
 		ws.cancelFn.Store(&cf)
 		defer ws.cancelFn.Store(nil)
-		ws.reset(task)
 	}
 
 	d.vlog("task %d-%d started", task.Start, task.End)
 
 	// Pre-compute Range header once per task (avoids per-attempt allocations).
 	rangeHeader := "bytes=" + strconv.FormatInt(task.Start, 10) + "-" + strconv.FormatInt(task.End, 10)
-	// AutoConfig.Compress is reserved-but-unused; range downloads do not
-	// request gzip as it would corrupt Range offsets.
+	// Range downloads do not request gzip: a gzipped Range response
+	// misaligns byte offsets. Accept-Encoding is always empty.
 	const acceptEncoding = ""
 
 	var lastErr error
@@ -252,7 +252,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 			drainAndClose(resp.Body)
 			return fmt.Errorf("range %d-%d: unexpected Content-Encoding %q", task.Start, task.End, enc)
 		}
-		return d.readBody(rctx, resp, task, f, ws, resp.Body)
+		return d.readBody(rctx, task, f, ws, resp.Body)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, maxHTTPStatusRetries, lastErr)
@@ -277,13 +277,13 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f fileWriter, ws *workerState, body io.ReadCloser) error {
+func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *workerState, body io.ReadCloser) error {
 	defer drainAndClose(body)
 
 	// Zero-copy fast path when the writer exposes the underlying mmap slice.
 	if wb, ok := f.(mmapWriterBytes); ok {
 		if data := wb.Bytes(); data != nil {
-			return d.readBodyDirect(resp, task, wb, ws, data)
+			return d.readBodyDirect(body, task, wb, ws, data)
 		}
 	}
 
@@ -322,7 +322,7 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 	}
 }
 
-func (d *Downloader) readBodyDirect(resp *http.Response, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
+func (d *Downloader) readBodyDirect(body io.ReadCloser, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
 	taskEnd := task.End
 	if taskEnd+1 > int64(len(data)) {
 		return fmt.Errorf("mmap slice short: end=%d len=%d", taskEnd, len(data))
@@ -342,7 +342,7 @@ func (d *Downloader) readBodyDirect(resp *http.Response, task Task, wb mmapWrite
 			want = remaining
 		}
 		buf := data[taskStart+cursor : taskStart+cursor+want]
-		n, rerr := resp.Body.Read(buf)
+		n, rerr := body.Read(buf)
 		if n > 0 {
 			cursor += int64(n)
 			if ws != nil {

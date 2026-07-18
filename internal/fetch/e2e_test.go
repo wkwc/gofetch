@@ -138,23 +138,22 @@ func TestEndToEndWithSHA512Verify(t *testing.T) {
 	}
 }
 
-// TestSidecarHashFetchOK exercises the sidecar-style parsing logic:
-// the .sha256 file contains the hex hash followed by filename, and
-// the parser should accept the leading 64 hex chars.
-func TestSidecarHashFetchOK(t *testing.T) {
+// TestSidecarHashParsing exercises the hash flag parsing logic that
+// the CLI uses for sidecar-style hashes (algo:hex format).
+func TestSidecarHashParsing(t *testing.T) {
 	payload := makePayload(512 * 1024)
 	hashHex := sha256Hex(payload)
 
-	parse := func(content string) string {
-		if len(content) > 64 {
-			content = content[:64]
-		}
-		return content
+	// Test that ParseHashFlag correctly handles sha256:hex format
+	algo, got, err := ParseHashFlag("sha256:" + hashHex)
+	if err != nil {
+		t.Fatalf("ParseHashFlag: %v", err)
 	}
-
-	got := parse(hashHex + "  out.bin\n")
+	if algo != "sha256" {
+		t.Fatalf("algo = %q, want sha256", algo)
+	}
 	if got != hashHex {
-		t.Fatalf("sidecar parse: got %q, want %q", got, hashHex)
+		t.Fatalf("hash parse: got %q, want %q", got, hashHex)
 	}
 }
 

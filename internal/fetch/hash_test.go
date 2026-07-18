@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -69,5 +70,82 @@ func TestVerifyFileHash(t *testing.T) {
 	// wrong hash
 	if err := verifyFileHash(path, "sha256", strings.Repeat("0", 64)); err == nil {
 		t.Error("verifyFileHash wrong hash: expected error, got nil")
+	}
+}
+
+func TestParseHashFlag(t *testing.T) {
+	sha256Hex := strings.Repeat("ab", 32) // 64 hex chars
+	sha512Hex := strings.Repeat("cd", 64) // 128 hex chars
+
+	tests := []struct {
+		name    string
+		input   string
+		algo    string
+		hexHash string
+		wantErr bool
+	}{
+		{name: "empty", input: "", algo: "", hexHash: ""},
+		{name: "bare sha256 hex", input: sha256Hex, algo: "sha256", hexHash: sha256Hex},
+		{name: "algo:hex sha256", input: "sha256:" + sha256Hex, algo: "sha256", hexHash: sha256Hex},
+		{name: "algo:hex sha512", input: "sha512:" + sha512Hex, algo: "sha512", hexHash: sha512Hex},
+		{name: "uppercase algo", input: "SHA256:" + sha256Hex, algo: "sha256", hexHash: sha256Hex},
+		{name: "unsupported algo", input: "md5:" + sha256Hex, wantErr: true},
+		{name: "wrong length sha256", input: "abcd", wantErr: true},
+		{name: "invalid hex chars", input: "zzzz" + strings.Repeat("ab", 30), wantErr: true},
+		{name: "sha256 hex too short", input: strings.Repeat("ab", 16), wantErr: true},
+		{name: "wrong length for sha256 (too long)", input: strings.Repeat("ab", 48), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			algo, hexHash, err := ParseHashFlag(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got algo=%q hex=%q", algo, hexHash)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if algo != tt.algo {
+				t.Errorf("algo = %q, want %q", algo, tt.algo)
+			}
+			if hexHash != tt.hexHash {
+				t.Errorf("hexHash = %q, want %q", hexHash, tt.hexHash)
+			}
+		})
+	}
+}
+
+func TestHashSize(t *testing.T) {
+	if got := hashSize("sha256"); got != sha256.Size {
+		t.Errorf("hashSize(sha256) = %d, want %d", got, sha256.Size)
+	}
+	if got := hashSize("sha512"); got != sha512.Size {
+		t.Errorf("hashSize(sha512) = %d, want %d", got, sha512.Size)
+	}
+	if got := hashSize("unknown"); got != sha256.Size {
+		t.Errorf("hashSize(unknown) = %d, want %d (default sha256)", got, sha256.Size)
+	}
+	if got := hashSize(""); got != sha256.Size {
+		t.Errorf("hashSize('') = %d, want %d (default sha256)", got, sha256.Size)
+	}
+}
+
+func TestValidateHexHash(t *testing.T) {
+	valid256 := strings.Repeat("a", 64)
+	valid512 := strings.Repeat("b", 128)
+
+	if err := validateHexHash(valid256, "sha256"); err != nil {
+		t.Errorf("valid sha256: %v", err)
+	}
+	if err := validateHexHash(valid512, "sha512"); err != nil {
+		t.Errorf("valid sha512: %v", err)
+	}
+	if err := validateHexHash("zzzz", "sha256"); err == nil {
+		t.Error("invalid hex: expected error")
+	}
+	if err := validateHexHash(valid256, "sha512"); err == nil {
+		t.Error("wrong length for sha512: expected error")
 	}
 }

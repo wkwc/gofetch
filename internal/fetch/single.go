@@ -31,6 +31,11 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		return fmt.Errorf("GET %s: status %d", d.url, resp.StatusCode)
 	}
 
+	if enc := resp.Header.Get("Content-Encoding"); !isIdentity(enc) {
+		drainAndClose(resp.Body)
+		return fmt.Errorf("GET %s: unexpected Content-Encoding %q", d.url, enc)
+	}
+
 	// Zero-copy fast path when the file is mmap'd.
 	if wb, ok := f.(mmapWriterBytes); ok {
 		if data := wb.Bytes(); data != nil {
@@ -38,10 +43,6 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		}
 	}
 
-	if enc := resp.Header.Get("Content-Encoding"); !isIdentity(enc) {
-		drainAndClose(resp.Body)
-		return fmt.Errorf("GET %s: unexpected Content-Encoding %q", d.url, enc)
-	}
 	defer drainAndClose(resp.Body)
 
 	buf := acquireBuf(d.bufSize)

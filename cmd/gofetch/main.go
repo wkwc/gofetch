@@ -66,7 +66,7 @@ func run() int {
 
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		fmt.Fprintln(os.Stderr, "gofetch: invalid url:", rawURL)
+		fmt.Fprintln(os.Stderr, "gofetch: invalid URL:", rawURL)
 		return 1
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {

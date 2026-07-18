@@ -1,11 +1,14 @@
 package fetch
 
 import (
+	"context"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestWorkerStateError(t *testing.T) {
@@ -79,5 +82,173 @@ func TestIsTransient(t *testing.T) {
 				t.Errorf("isTransient(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	tests := []struct {
+		name   string
+		header http.Header
+		want   time.Duration
+	}{
+		{name: "empty header", header: http.Header{}, want: 0},
+		{name: "valid seconds", header: http.Header{"Retry-After": []string{"5"}}, want: 5 * time.Second},
+		{name: "zero seconds", header: http.Header{"Retry-After": []string{"0"}}, want: 5 * time.Second},
+		{name: "negative seconds", header: http.Header{"Retry-After": []string{"-1"}}, want: 5 * time.Second},
+		{name: "over max (301)", header: http.Header{"Retry-After": []string{"301"}}, want: 5 * time.Second},
+		{name: "at max (300)", header: http.Header{"Retry-After": []string{"300"}}, want: 300 * time.Second},
+		{name: "non-numeric", header: http.Header{"Retry-After": []string{"Mon, 01 Jan 2024"}}, want: 5 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseRetryAfter(tt.header)
+			if got != tt.want {
+				t.Errorf("parseRetryAfter = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSleepCtx(t *testing.T) {
+	t.Run("immediate cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if sleepCtx(ctx, time.Second) {
+			t.Error("expected false for cancelled context")
+		}
+	})
+
+	t.Run("zero duration", func(t *testing.T) {
+		if !sleepCtx(context.Background(), 0) {
+			t.Error("expected true for zero duration")
+		}
+	})
+
+	t.Run("negative duration", func(t *testing.T) {
+		if !sleepCtx(context.Background(), -1) {
+			t.Error("expected true for negative duration")
+		}
+	})
+
+	t.Run("normal sleep", func(t *testing.T) {
+		start := time.Now()
+		if !sleepCtx(context.Background(), 10*time.Millisecond) {
+			t.Error("expected true for normal sleep")
+		}
+		if time.Since(start) < 5*time.Millisecond {
+			t.Error("sleep returned too quickly")
+		}
+	})
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		input time.Duration
+		want  string
+	}{
+		{0, "0ms"},
+		{500 * time.Millisecond, "500ms"},
+		{999 * time.Millisecond, "999ms"},
+		{time.Second, "1.0s"},
+		{5500 * time.Millisecond, "5.5s"},
+		{time.Minute, "1m0s"},
+		{90 * time.Second, "1m30s"},
+		{3661 * time.Second, "61m1s"},
+	}
+	for _, tt := range tests {
+		if got := formatDuration(tt.input); got != tt.want {
+			t.Errorf("formatDuration(%v) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestStealPlanIdle(t *testing.T) {
+	ws := newWorkerState()
+	// No task → no steal
+	_, _, ok := ws.stealPlan(time.Now())
+	if ok {
+		t.Error("expected no steal for idle worker")
+	}
+}
+
+func TestStealPlanSmallTask(t *testing.T) {
+	ws := newWorkerState()
+	// Task smaller than 2*stealMinChunk → no steal
+	ws.reset(Task{Start: 0, End: stealMinChunk})
+	_, _, ok := ws.stealPlan(time.Now().Add(2 * time.Second))
+	if ok {
+		t.Error("expected no steal for small task")
+	}
+}
+
+func TestStealPlanWithinGracePeriod(t *testing.T) {
+	ws := newWorkerState()
+	ws.reset(Task{Start: 0, End: stealMinChunk * 4})
+	// Started now → within grace period
+	_, _, ok := ws.stealPlan(time.Now())
+	if ok {
+		t.Error("expected no steal within grace period")
+	}
+}
+
+func TestStealPlanSlowWorker(t *testing.T) {
+	ws := newWorkerState()
+	ws.reset(Task{Start: 0, End: stealMinChunk * 4})
+	ws.bytesDone.Store(stealSlowBytes + 1) // made enough progress
+	cf := context.CancelFunc(func() {})
+	ws.cancelFn.Store(&cf)
+
+	// Enough time has passed, but enough bytes transferred
+	_, _, ok := ws.stealPlan(time.Now().Add(2 * time.Second))
+	if ok {
+		t.Error("expected no steal for worker that made sufficient progress")
+	}
+}
+
+func TestStealPlanStealCandidate(t *testing.T) {
+	ws := newWorkerState()
+	ws.reset(Task{Start: 0, End: stealMinChunk * 4})
+	ws.bytesDone.Store(100) // barely any progress
+	cf := context.CancelFunc(func() {})
+	ws.cancelFn.Store(&cf)
+
+	// Enough time has passed, not enough bytes → steal candidate
+	newTask, cancel, ok := ws.stealPlan(time.Now().Add(2 * time.Second))
+	if !ok {
+		t.Fatal("expected steal candidate")
+	}
+	if cancel == nil {
+		t.Error("expected non-nil cancel function")
+	}
+	if newTask.Start != 100 {
+		t.Errorf("newTask.Start = %d, want 100", newTask.Start)
+	}
+	if newTask.End != stealMinChunk*4 {
+		t.Errorf("newTask.End = %d, want %d", newTask.End, stealMinChunk*4)
+	}
+}
+
+func TestStealPlanCancelFnNil(t *testing.T) {
+	ws := newWorkerState()
+	ws.reset(Task{Start: 0, End: stealMinChunk * 4})
+	ws.bytesDone.Store(100)
+	// cancelFn is nil (not yet stored by workerLoop)
+
+	_, _, ok := ws.stealPlan(time.Now().Add(2 * time.Second))
+	if ok {
+		t.Error("expected no steal when cancelFn is nil")
+	}
+}
+
+func TestStealPlanZeroProgress(t *testing.T) {
+	ws := newWorkerState()
+	ws.reset(Task{Start: 0, End: stealMinChunk * 4})
+	// bytesDone stays 0, cancelFn is set
+	cf := context.CancelFunc(func() {})
+	ws.cancelFn.Store(&cf)
+
+	_, _, ok := ws.stealPlan(time.Now().Add(2 * time.Second))
+	if ok {
+		t.Error("expected no steal when bytesDone is 0")
 	}
 }

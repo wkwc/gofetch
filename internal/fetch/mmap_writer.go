@@ -3,7 +3,6 @@ package fetch
 import (
 	"fmt"
 	"os"
-	"syscall"
 )
 
 // fileWriter is the abstraction over the output file, allowing us to
@@ -30,7 +29,8 @@ func (r *rawFileWriter) Sync() error { return r.F.Sync() }
 func (r *rawFileWriter) Close() error { return r.F.Close() }
 
 // Bytes returns nil for raw writers — the generic Read→buffer→write path
-// is used. The mmap path exposes real bytes for direct reads.
+// is used. Workers type-assert fileWriter to mmapWriterBytes to skip
+// the memcpy step when the mmap slice is available.
 func (r *rawFileWriter) Bytes() []byte { return nil }
 
 // mmapWriterBytes is the interface to access the mmap'd slice. Workers
@@ -61,9 +61,7 @@ func newMmapWriter(path string, size int64) (*mmapWriter, error) {
 		fd.Close()
 		return nil, fmt.Errorf("truncate: %w", err)
 	}
-	data, err := syscall.Mmap(int(fd.Fd()), 0, int(size),
-		syscall.PROT_READ|syscall.PROT_WRITE,
-		syscall.MAP_SHARED)
+	data, err := mmapSys(fd.Fd(), int(size))
 	if err != nil {
 		fd.Close()
 		return nil, fmt.Errorf("mmap: %w", err)
@@ -71,7 +69,7 @@ func newMmapWriter(path string, size int64) (*mmapWriter, error) {
 	// Hint the kernel we'll access the bytes sequentially. This avoids
 	// the reader-side readahead state machine being initialized for a
 	// memory region we'll only write to.
-	_ = hintMmapSequential(data)
+	_ = hintSequential(data)
 	return &mmapWriter{fd: fd, data: data, size: size}, nil
 }
 
@@ -101,7 +99,7 @@ func (m *mmapWriter) Close() error {
 		return nil
 	}
 	_ = m.fd.Sync()
-	unmapErr := syscall.Munmap(m.data)
+	unmapErr := munmapSys(m.data)
 	m.data = nil
 	closeErr := m.fd.Close()
 	m.fd = nil
@@ -152,9 +150,7 @@ func (m *mmapWriter) withMmap() (*mmapWriter, error) {
 	if m.data != nil {
 		return m, nil
 	}
-	data, err := syscall.Mmap(int(m.fd.Fd()), 0, int(m.size),
-		syscall.PROT_READ|syscall.PROT_WRITE,
-		syscall.MAP_SHARED)
+	data, err := mmapSys(m.fd.Fd(), int(m.size))
 	if err != nil {
 		return nil, fmt.Errorf("mmap resume: %w", err)
 	}

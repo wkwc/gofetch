@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"math/rand/v2"
+	"sort"
 	"testing"
 )
 
@@ -229,14 +230,9 @@ func TestUncompletedProperties(t *testing.T) {
 			}
 			// Merge and check
 			if len(covered) > 0 {
-				// Sort
-				for a := 0; a < len(covered)-1; a++ {
-					for b := a + 1; b < len(covered); b++ {
-						if covered[b].Start < covered[a].Start {
-							covered[a], covered[b] = covered[b], covered[a]
-						}
-					}
-				}
+				sort.Slice(covered, func(i, j int) bool {
+					return covered[i].Start < covered[j].Start
+				})
 				// Merge
 				merged := []Task{covered[0]}
 				for _, c := range covered[1:] {

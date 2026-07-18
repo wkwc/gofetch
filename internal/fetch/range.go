@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// resumeResumeSeeds seeds the progress tracker with bytes that were
+// seedResumeBytes seeds the progress tracker with bytes that were
 // already on disk when we resumed. preDone survives worker.reset()
 // whereas per-worker bytesDone does not, so this avoids the
 // startup-progress-shrink race.

@@ -19,7 +19,6 @@ type AutoConfig struct {
 	RetryBase time.Duration
 	RetryCap  time.Duration
 	Timeout   time.Duration
-	Compress  bool
 }
 
 // AutoConfigure computes optimal parameters for the given file size hint.
@@ -32,10 +31,6 @@ func AutoConfigure(fileSizeHint int64) AutoConfig {
 		RetryBase: 100 * time.Millisecond,
 		RetryCap:  30 * time.Second,
 		Timeout:   10 * time.Second,
-		// Range downloads never request compression: a server that
-		// gzips a Range response emits encoded-byte counts at the
-		// transport layer which misalign with the requested offsets.
-		Compress: false,
 	}
 }
 
@@ -126,9 +121,7 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpFastOpen, 1)
 			// TCP_NOTSENT_LOWAT (Linux 4.15+) — wires kernel-side pacing.
 			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpNotSentLowat, tcpNotSentLowatV)
-			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPIDLE, 10)
-			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPINTVL, 3)
-			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_KEEPCNT, 3)
+			tcpKeepalive(fd)
 		})
 	}
 	return &http.Transport{

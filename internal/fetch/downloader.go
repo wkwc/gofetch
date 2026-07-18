@@ -53,10 +53,6 @@ type Options struct {
 // NewDownloader constructs a Downloader with auto-configured defaults.
 func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	ac := AutoConfigure(0)
-	algo := opt.HashAlgo
-	if algo == "" {
-		algo = "sha256"
-	}
 	d := &Downloader{
 		url:           rawURL,
 		mirrors:       opt.Mirrors,
@@ -67,7 +63,7 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		quiet:         opt.Quiet,
 		verbose:       opt.Verbose,
 		autoConfig:    ac,
-		hashAlgo:      algo,
+		hashAlgo:      opt.HashAlgo,
 		expectedHash:  opt.ExpectedHash,
 		resumePath:    resumePath(outPath),
 	}
@@ -92,20 +88,20 @@ const smallFileThreshold = 64 * 1024
 // On success it calls finalize with the active progress tracker and file
 // writer; on failure it returns the most-recent error.
 func (d *Downloader) Download(ctx context.Context) error {
-	urls := append([]string{d.url}, d.mirrors...)
+	origURL := d.url
+	urls := append([]string{origURL}, d.mirrors...)
 	var lastErr error
 
-	for i, url := range urls {
+	for i, activeURL := range urls {
 		if i > 0 {
 			d.vlog("mirror %d/%d failed (%v), trying mirror %d/%d: %s",
-				i, len(urls), lastErr, i+1, len(urls), url)
+				i, len(urls), lastErr, i+1, len(urls), activeURL)
 		}
-		d.url = url
 		d.startTime = time.Now()
 
-		info, err := d.probeURL(ctx, d.url)
+		info, err := d.probeURL(ctx, activeURL)
 		if err != nil {
-			lastErr = fmt.Errorf("mirror %d (%s) probe: %w", i+1, url, err)
+			lastErr = fmt.Errorf("mirror %d (%s) probe: %w", i+1, activeURL, err)
 			continue
 		}
 
@@ -117,7 +113,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 
 		var completed []Task
 		if d.resumeEnabled {
-			if st, _ := loadResume(d.resumePath, d.url, info.total); st != nil {
+			if st, _ := loadResume(d.resumePath, activeURL, info.total); st != nil {
 				completed = st.Completed
 				sortByStart(completed)
 				d.vlog("resumed from %d completed chunks", len(completed))
@@ -126,35 +122,49 @@ func (d *Downloader) Download(ctx context.Context) error {
 
 		f, err := allocateFileWriter(d.outFile, info.total, d.resumeEnabled)
 		if err != nil {
-			lastErr = fmt.Errorf("mirror %d (%s) file setup: %w", i+1, url, err)
+			lastErr = fmt.Errorf("mirror %d (%s) file setup: %w", i+1, activeURL, err)
 			continue
 		}
-		// closeFile is invoked on every exit path so the file writer
-		// (and its mmap, if any) is released before the next mirror
-		// attempt allocates a fresh one.
-		success := false
-		closeFile := func() {
-			if !success {
-				_ = f.Close()
-			}
-		}
-		defer closeFile()
 
-		if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
-			err = d.singleDownload(ctx, info.total, completed, f)
-		} else {
-			err = d.rangeDownload(ctx, info.total, completed, f)
-		}
-		if err == nil {
-			// Restore original URL so the summary refers to it.
-			d.url = urls[0]
-			success = true
+		// Each mirror iteration opens a fresh file writer. Close it
+		// explicitly before the next attempt instead of using defer,
+		// which would leak file descriptors for earlier mirrors until
+		// the entire function returns.
+		downloaded := d.downloadFromMirror(ctx, activeURL, info, completed, f)
+		if downloaded.ok() {
+			d.url = origURL
 			return d.finalize(f, nil)
 		}
-		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, urls[i], err)
+		_ = f.Close()
+
+		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, downloaded.err)
 		if d.resumeEnabled {
 			_ = os.Remove(d.outFile + ".gofetch.resume")
 		}
 	}
 	return lastErr
 }
+
+// downloadFromMirror attempts to download from a single URL using either
+// range or single-stream mode. Returns (true, nil) on success.
+func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, info probeInfo, completed []Task, f fileWriter) mirrorResult {
+	// Temporarily set d.url so runTask/workerLoop use the active mirror.
+	savedURL := d.url
+	d.url = activeURL
+	defer func() { d.url = savedURL }()
+
+	var err error
+	if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
+		err = d.singleDownload(ctx, info.total, completed, f)
+	} else {
+		err = d.rangeDownload(ctx, info.total, completed, f)
+	}
+	return mirrorResult{err: err}
+}
+
+// mirrorResult carries the outcome of a single mirror attempt.
+type mirrorResult struct {
+	err error
+}
+
+func (r mirrorResult) ok() bool { return r.err == nil }

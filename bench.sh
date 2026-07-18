@@ -34,25 +34,13 @@ run_bench() {
         return 1
     fi
     
-    echo "--- Single worker (baseline) ---"
-    $GOFETCH -w 1 -o "$TMPDIR/out_1w.bin" "$URL" 2>&1
-    rm -f "$TMPDIR/out_1w.bin"
-    
-    echo "--- Auto workers (default) ---"
+    echo "--- Default auto-configured ---"
     $GOFETCH -o "$TMPDIR/out_auto.bin" "$URL" 2>&1
     rm -f "$TMPDIR/out_auto.bin"
     
-    echo "--- 4 workers ---"
-    $GOFETCH -w 4 -o "$TMPDIR/out_4w.bin" "$URL" 2>&1
-    rm -f "$TMPDIR/out_4w.bin"
-    
-    echo "--- 8 workers ---"
-    $GOFETCH -w 8 -o "$TMPDIR/out_8w.bin" "$URL" 2>&1
-    rm -f "$TMPDIR/out_8w.bin"
-    
-    echo "--- 16 workers ---"
-    $GOFETCH -w 16 -o "$TMPDIR/out_16w.bin" "$URL" 2>&1
-    rm -f "$TMPDIR/out_16w.bin"
+    echo "--- Quiet mode ---"
+    $GOFETCH -q -o "$TMPDIR/out_quiet.bin" "$URL" 2>&1
+    rm -f "$TMPDIR/out_quiet.bin"
     
     kill $SERVER_PID 2>/dev/null
     wait $SERVER_PID 2>/dev/null || true
@@ -68,26 +56,23 @@ echo ""
 # Warm up
 run_bench 1 "warmup"
 
-# Hyperfine comparison: 1w vs auto vs 8w
-echo ""
-echo "=== Hyperfine: Worker count comparison (64 MB) ==="
-BENCH_SIZE_MB=64 $BENCHSERVER &
-sleep 0.5
-
-hyperfine --warmup 2 --min-runs 3 \
-    -n "gofetch-1w"  "$GOFETCH -w 1 -o $TMPDIR/b1.bin $URL" \
-    -n "gofetch-auto" "$GOFETCH -o $TMPDIR/b2.bin $URL" \
-    -n "gofetch-4w"  "$GOFETCH -w 4 -o $TMPDIR/b4.bin $URL" \
-    -n "gofetch-8w"  "$GOFETCH -w 8 -o $TMPDIR/b8.bin $URL" \
-    -n "gofetch-16w" "$GOFETCH -w 16 -o $TMPDIR/b16.bin $URL" \
-    --cleanup "rm -f $TMPDIR/b1.bin $TMPDIR/b2.bin $TMPDIR/b4.bin $TMPDIR/b8.bin $TMPDIR/b16.bin" \
-    2>&1
-
-kill %1 2>/dev/null; wait %1 2>/dev/null || true
-
 # Size scaling test
 for size in 1 16 64 256; do
     run_bench $size "${size}MB"
+done
+
+# Hyperfine comparison: different sizes with auto-configured workers
+echo ""
+echo "=== Hyperfine: Size scaling (auto workers) ==="
+for size in 16 64 256; do
+    BENCH_SIZE_MB=$size $BENCHSERVER &
+    SERVER_PID=$!
+    sleep 0.5
+    hyperfine --warmup 2 --min-runs 3 \
+        -n "gofetch-${size}MB" "$GOFETCH -o $TMPDIR/b${size}.bin $URL" \
+        --cleanup "rm -f $TMPDIR/b${size}.bin" \
+        2>&1 || true
+    kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null || true
 done
 
 echo ""

@@ -4,7 +4,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -57,8 +56,7 @@ func TestResumePath(t *testing.T) {
 	}
 }
 
-func TestMainEntryURLParse(t *testing.T) {
-	// Mirror the URL validation done by main.go run().
+func TestURLValidation(t *testing.T) {
 	cases := []struct {
 		raw  string
 		want bool
@@ -77,28 +75,6 @@ func TestMainEntryURLParse(t *testing.T) {
 	}
 }
 
-func TestMirrorListParsing(t *testing.T) {
-	// The mirror parser logic in main.go constructs a list:
-	raw := "https://example.com/file"
-	mirrors := "https://a/file,https://b/file,https://c/file"
-	got := []string{raw}
-	for _, m := range strings.Split(mirrors, ",") {
-		m = strings.TrimSpace(m)
-		if m != "" && m != raw {
-			got = append(got, m)
-		}
-	}
-	want := []string{raw, "https://a/file", "https://b/file", "https://c/file"}
-	if len(got) != len(want) {
-		t.Fatalf("len = %d, want %d", len(got), len(want))
-	}
-	for i, w := range want {
-		if got[i] != w {
-			t.Errorf("[%d] = %q, want %q", i, got[i], w)
-		}
-	}
-}
-
 func TestParseUint(t *testing.T) {
 	tests := []struct {
 		s    string
@@ -109,9 +85,9 @@ func TestParseUint(t *testing.T) {
 		{"1", 1, true},
 		{"42", 42, true},
 		{"999999999", 999999999, true},
-		{"9223372036854775807", 9223372036854775807, true}, // MaxInt64
-		{"9223372036854775808", 0, false},                  // MaxInt64+1 → overflow
-		{"99999999999999999999", 0, false},                 // way too big
+		{"9223372036854775807", 9223372036854775807, true},
+		{"9223372036854775808", 0, false},
+		{"99999999999999999999", 0, false},
 		{"", 0, false},
 		{"abc", 0, false},
 		{"12abc", 0, false},
@@ -129,7 +105,6 @@ func TestParseUint(t *testing.T) {
 }
 
 func TestParseContentRangeOverflow(t *testing.T) {
-	// Server sends a total that overflows int64.
 	_, _, _, ok := parseContentRange("bytes 0-0/99999999999999999999")
 	if ok {
 		t.Error("expected parse failure for overflowing Content-Range total")
