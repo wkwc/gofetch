@@ -14,14 +14,14 @@ import (
 // download doesn't get demoted to sha256 by a reader that only sees
 // d.expectedHash on the receiver side.
 type ResumeState struct {
-	URL            string    `json:"url"`
-	OutFile        string    `json:"out_file"`
-	TotalSize      int64     `json:"total_size"`
-	HashAlgo       string    `json:"hash_algo,omitempty"`
-	ExpectedHash   string    `json:"expected_hash,omitempty"`
-	Completed      []Task    `json:"completed"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	URL          string    `json:"url"`
+	OutFile      string    `json:"out_file"`
+	TotalSize    int64     `json:"total_size"`
+	HashAlgo     string    `json:"hash_algo,omitempty"`
+	ExpectedHash string    `json:"expected_hash,omitempty"`
+	Completed    []Task    `json:"completed"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // resumePath returns the canonical sidecar path for an output file.
