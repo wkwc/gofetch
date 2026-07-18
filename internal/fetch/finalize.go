@@ -7,9 +7,20 @@ import (
 )
 
 // finalize prints the download summary, verifies hashes, and clears resume state.
+// f may be nil if already closed; prog is built here when nil so speed/bytes
+// reflect a fresh progress snapshot rather than dropping to (0,total).
 func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 	if prog == nil {
-		prog = newProgress(d.totalSize, nil)
+		states := make([]*workerState, max(d.workersN, 1))
+		for i := range states {
+			states[i] = newWorkerState()
+		}
+		prog = newProgress(d.totalSize, states)
+		// Reflect we have everything (downloader only calls finalize on
+		// success — the EOF path) so the snapshot reads the real total.
+		if d.totalSize > 0 {
+			prog.add(d.totalSize)
+		}
 	}
 	d.printProgress(prog, true)
 
@@ -18,7 +29,6 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 		return nil
 	}
 
-	// Ensure all bytes are on disk before verification.
 	if f != nil {
 		if err := f.Sync(); err != nil {
 			return fmt.Errorf("sync: %w", err)
@@ -34,11 +44,11 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 	done, _ := prog.snapshot()
 
 	speed := float64(0)
-	if elapsed.Seconds() > 0 {
+	if elapsed > 0 {
 		speed = float64(done) / elapsed.Seconds()
 	}
 
-	fmt.Fprintf(os.Stderr, "\n  download complete\n")
+	fmt.Fprintln(os.Stderr, "\n  download complete")
 	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", humanBytes(done))
 	fmt.Fprintf(os.Stderr, "  time:    %s\n", formatDuration(elapsed))
 	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", humanBytes(int64(speed)))

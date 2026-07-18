@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
 // ManifestVersion is the current manifest format version.
@@ -17,6 +18,7 @@ type Manifest struct {
 	Algo    string                     `json:"algo"`
 	Chunks  []ChunkHash                `json:"chunks"`
 	index   map[int64]map[int64]string // start -> end -> hash (built on load)
+	once    sync.Once                  // guards lazy buildIndex
 }
 
 // ChunkHash maps a byte range to its expected hash.
@@ -113,16 +115,15 @@ func verifyHash(data []byte, algo, expected string) error {
 }
 
 // buildIndex builds the O(1) lookup map for chunks.
-// Called lazily on first VerifyChunk or eagerly from LoadManifest.
+// Called eagerly from LoadManifest and lazily from VerifyChunk via sync.Once.
 func (m *Manifest) buildIndex() {
-	if m.index != nil {
-		return
-	}
-	m.index = make(map[int64]map[int64]string, len(m.Chunks))
-	for _, c := range m.Chunks {
-		if m.index[c.Start] == nil {
-			m.index[c.Start] = make(map[int64]string)
+	m.once.Do(func() {
+		m.index = make(map[int64]map[int64]string, len(m.Chunks))
+		for _, c := range m.Chunks {
+			if m.index[c.Start] == nil {
+				m.index[c.Start] = make(map[int64]string)
+			}
+			m.index[c.Start][c.End] = c.Hash
 		}
-		m.index[c.Start][c.End] = c.Hash
-	}
+	})
 }

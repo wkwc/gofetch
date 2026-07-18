@@ -12,15 +12,9 @@ import (
 // one worker streams the entire body at offset 0 without Range headers.
 // The file writer f is managed by the caller (already open, will be closed by caller).
 func (d *Downloader) singleDownload(ctx context.Context, total int64, completed []Task, f fileWriter) error {
-	states := []*workerState{newWorkerState()}
-	prog := newProgress(total, []*workerState{states[0]})
-
-	// Pre-fill completed bytes so snapshot returns the right total.
-	var doneBytes int64
-	for _, t := range completed {
-		doneBytes += t.Len()
-	}
-	states[0].bytesDone.Store(doneBytes)
+	ws := newWorkerState()
+	prog := newProgress(total, []*workerState{ws})
+	seedResumeBytes(prog, completed)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
 	if err != nil {
@@ -36,12 +30,27 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		drainAndClose(resp.Body)
 		return fmt.Errorf("GET %s: status %d", d.url, resp.StatusCode)
 	}
+
+	// Zero-copy fast path when the file is mmap'd.
+	if wb, ok := f.(mmapWriterBytes); ok {
+		if data := wb.Bytes(); data != nil {
+			return d.singleMmap(resp.Body, ws, data, total)
+		}
+	}
+
+	if enc := resp.Header.Get("Content-Encoding"); !isIdentity(enc) {
+		drainAndClose(resp.Body)
+		return fmt.Errorf("GET %s: unexpected Content-Encoding %q", d.url, enc)
+	}
 	defer drainAndClose(resp.Body)
 
 	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
-	ws := states[0]
-	var cursor int64
+	manifest := d.manifest
+	// Seed cursor from any resumed bytes (typically zero here since a
+	// non-ranged server can't resume, but prog already accounts for them).
+	doneBytes, _ := prog.snapshot()
+	var cursor int64 = doneBytes
 	for {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
@@ -49,9 +58,9 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 				return werr
 			}
 			cursor += int64(n)
-			ws.bytesDone.Store(doneBytes + cursor)
-			if d.manifest != nil {
-				if err := d.manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
+			ws.bytesDone.Store(cursor)
+			if manifest != nil {
+				if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
 					return err
 				}
 			}
@@ -62,6 +71,47 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 			}
 			return rerr
 		}
+		if total > 0 && cursor >= total {
+			break
+		}
 	}
 	return d.finalize(f, prog)
+}
+
+// singleMmap streams the body straight into the mmap'd output slice.
+// Bytes from any previously-completed resume (preDone) are skipped.
+func (d *Downloader) singleMmap(body io.ReadCloser, ws *workerState, data []byte, total int64) error {
+	defer drainAndClose(body)
+	ws.reset(Task{Start: 0, End: total - 1})
+
+	manifest := d.manifest
+	bufCap := int64(d.bufSize)
+	cursor := ws.bytesDone.Load()
+	for {
+		remaining := int64(len(data)) - cursor
+		if remaining <= 0 {
+			return nil
+		}
+		want := bufCap
+		if want > remaining {
+			want = remaining
+		}
+		buf := data[cursor : cursor+want]
+		n, rerr := body.Read(buf)
+		if n > 0 {
+			cursor += int64(n)
+			ws.bytesDone.Store(cursor)
+			if manifest != nil {
+				if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
+					return err
+				}
+			}
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return nil
+			}
+			return rerr
+		}
+	}
 }

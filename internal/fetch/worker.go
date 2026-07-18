@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-// maxHTTPStatusRetries caps the number of times a single runTask call retries
-// the same Range request in response to 429/503/etc. Prevents unbounded retries
-// when a server is misbehaving.
 const maxHTTPStatusRetries = 10
 
 // workerState is the live state of one worker goroutine.
@@ -24,16 +21,15 @@ const maxHTTPStatusRetries = 10
 type workerState struct {
 	curTask   atomic.Pointer[Task]
 	bytesDone atomic.Int64
-	startedAt atomic.Int64  // unix nano
-	taskGen   atomic.Uint64 // incremented each reset; monitor uses to detect stale reads
+	startedAt atomic.Int64
+	taskGen   atomic.Uint64
 	cancelFn  atomic.Pointer[context.CancelFunc]
-	stealFlag atomic.Bool // set true when monitor preempts; tells workerLoop not to re-push
+	stealFlag atomic.Bool
 	errVal    atomic.Pointer[error]
 }
 
 func newWorkerState() *workerState { return &workerState{} }
 
-// setErr records the first non-nil error.
 func (ws *workerState) setErr(err error) {
 	if err == nil {
 		return
@@ -42,7 +38,6 @@ func (ws *workerState) setErr(err error) {
 	ws.errVal.CompareAndSwap(nil, &e)
 }
 
-// err returns the recorded error (if any).
 func (ws *workerState) err() (error, bool) {
 	p := ws.errVal.Load()
 	if p == nil {
@@ -51,17 +46,18 @@ func (ws *workerState) err() (error, bool) {
 	return *p, true
 }
 
-// reset initializes state for a fresh task run.
 func (ws *workerState) reset(task Task) {
 	taskRef := task
 	ws.curTask.Store(&taskRef)
 	ws.bytesDone.Store(0)
 	ws.stealFlag.Store(false)
 	ws.startedAt.Store(time.Now().UnixNano())
+	// bytesDone is stored BEFORE taskGen so the steal plan's re-check
+	// at monitor.stealPlan cannot observe a stale (old task) bytesDone
+	// paired with a new taskGen: either both old or both new are visible.
 	ws.taskGen.Add(1)
 }
 
-// isTransient returns true for network-level errors worth retrying.
 func isTransient(err error) bool {
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
@@ -81,13 +77,22 @@ func isTransient(err error) bool {
 	return false
 }
 
-// isRetryableHTTP returns true for HTTP status codes that warrant automatic retry.
 func isRetryableHTTP(code int) bool {
-	return code == http.StatusTooManyRequests ||
-		code == http.StatusServiceUnavailable ||
-		code == http.StatusBadGateway ||
-		code == http.StatusGatewayTimeout ||
-		code == http.StatusRequestTimeout
+	switch code {
+	case http.StatusTooManyRequests,
+		http.StatusServiceUnavailable,
+		http.StatusBadGateway,
+		http.StatusGatewayTimeout,
+		http.StatusRequestTimeout:
+		return true
+	}
+	return false
+}
+
+// isIdentity treats anything other than the empty token or "identity" as
+// real compression that would corrupt Range past-the-end math.
+func isIdentity(enc string) bool {
+	return enc == "" || enc == "identity"
 }
 
 // parseRetryAfter parses the RFC 7231 Retry-After header.
@@ -100,20 +105,9 @@ func parseRetryAfter(h http.Header) time.Duration {
 	if secs, err := strconv.Atoi(v); err == nil && secs > 0 && secs <= 300 {
 		return time.Duration(secs) * time.Second
 	}
-	// Non-integer value (e.g., HTTP-date): fall back to 5s.
 	return 5 * time.Second
 }
 
-// chunkKey used to be a helper; inlined for hot-path inlining and
-// less abstraction. Two Tasks belong to the same logical chunk iff
-// their End offsets match the original seeded End. This survives
-// partial downloads and steals (which preserve End) so that retry
-// accounting accumulates correctly.
-
-// workerLoop pops tasks from queue, runs them, signals saveC on success.
-// On context cancellation it re-pushes the unfinished portion of the task
-// (skipping when the cancel came from monitor's steal plan). Transient
-// network errors and HTTP 429/503 are retried with exponential backoff.
 func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, f fileWriter, saveC chan<- struct{}) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -150,16 +144,12 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 	}
 }
 
-// requeueUnfinished pushes the unfinished remainder of an aborted task
-// back to the queue with bounded retries and exponential backoff.
-// The retry budget is keyed on the original chunk's End so the count
-// accumulates across partial failures of the same logical chunk.
 func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, task Task, queue *Queue) {
 	remaining := Task{Start: task.Start + ws.bytesDone.Load(), End: task.End}
 	if remaining.Start >= remaining.End {
 		return
 	}
-	key := task.End // stable identity = original chunk's End (was chunkKey)
+	key := task.End
 	d.retryMu.Lock()
 	if d.retryCount == nil {
 		d.retryCount = make(map[int64]int)
@@ -172,19 +162,17 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 	}
 	d.retryCount[key] = n + 1
 	d.retryMu.Unlock()
-	backoff := d.autoConfig.Backoff(n)
-	d.vlog("task %d-%d retry %d (backoff %s)", remaining.Start, remaining.End, n+1, backoff)
+	wait := d.autoConfig.Backoff(n)
+	d.vlog("task %d-%d retry %d (backoff %s)", remaining.Start, remaining.End, n+1, wait)
 
-	// If we're already shutting down, push immediately (no point waiting).
 	if ctx.Err() != nil {
 		queue.Push(remaining)
 		return
 	}
-	timer := time.NewTimer(backoff)
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		// Don't push back into a closing pipeline; just record the ctx error.
 		ws.setErr(ctx.Err())
 	case <-timer.C:
 		queue.Push(remaining)
@@ -192,7 +180,7 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 }
 
 // runTask performs the HTTP range request for one task, writing bytes
-// to f. ws may be nil for the single-stream fallback.
+// to f. ws may be nil for the single-stream fallback path.
 func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f fileWriter) error {
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -205,19 +193,13 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 
 	d.vlog("task %d-%d started", task.Start, task.End)
 
-	// Pre-compute Range header once per task (avoid 2 strconv.FormatInt
-	// allocations per HTTP attempt).
+	// Pre-compute Range header once per task (avoids per-attempt allocations).
 	rangeHeader := "bytes=" + strconv.FormatInt(task.Start, 10) + "-" + strconv.FormatInt(task.End, 10)
-
-	// Pre-compute User-Agent and Accept-Encoding if needed.
-	acceptEncoding := ""
-	if d.autoConfig.Compress {
-		acceptEncoding = "gzip"
-	}
+	// AutoConfig.Compress is reserved-but-unused; range downloads do not
+	// request gzip as it would corrupt Range offsets.
+	const acceptEncoding = ""
 
 	var lastErr error
-	// Bound the inner retry loop so a persistently-broken server cannot
-	// hold a worker forever.
 	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
 		req, err := http.NewRequestWithContext(rctx, http.MethodGet, d.url, nil)
 		if err != nil {
@@ -234,7 +216,6 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 			return err
 		}
 
-		// Server-retryable status (429, 503, etc.).
 		if isRetryableHTTP(resp.StatusCode) {
 			wait := parseRetryAfter(resp.Header)
 			if wait == 0 {
@@ -244,41 +225,34 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			d.vlog("HTTP %d on %d-%d, retrying after %s (attempt %d)",
 				resp.StatusCode, task.Start, task.End, wait, attempt+1)
-			select {
-			case <-rctx.Done():
+			if !sleepCtx(rctx, wait) {
 				return rctx.Err()
-			case <-time.After(wait):
 			}
 			continue
 		}
 
-		// 200 OK means the server does not support Range requests at all.
-		if resp.StatusCode == http.StatusOK {
+		switch resp.StatusCode {
+		case http.StatusOK:
 			drainAndClose(resp.Body)
 			return fmt.Errorf("range %d-%d: server returned 200 OK (does not support range requests)", task.Start, task.End)
-		}
-
-		// 416 Range Not Satisfiable — treat as already complete.
-		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		case http.StatusRequestedRangeNotSatisfiable:
 			drainAndClose(resp.Body)
 			d.vlog("HTTP 416 on %d-%d: range unsatisfiable, skipping", task.Start, task.End)
 			return nil
-		}
-
-		if resp.StatusCode != http.StatusPartialContent {
+		case http.StatusPartialContent:
+			// fall through to read body
+		default:
 			drainAndClose(resp.Body)
 			return fmt.Errorf("range %d-%d: status %d", task.Start, task.End, resp.StatusCode)
 		}
 
-		// On success path: read body. drainAndClose must be called here,
-		// not via defer (defer would accumulate across retry iterations).
-		// Wrap response body with decompressor if Content-Encoding is present.
-		encoding := resp.Header.Get("Content-Encoding")
-		var body io.ReadCloser = resp.Body
-		if body != nil && (encoding == "gzip" || encoding == "x-gzip" || encoding == "zstd" || encoding == "xz" || encoding == "lzma") {
-			body, _ = DecompressReader(body, encoding)
+		// Rangeable downloads do not negotiate compression; if a server
+		// still sends Content-Encoding we reject rather than corrupt the file.
+		if enc := resp.Header.Get("Content-Encoding"); !isIdentity(enc) {
+			drainAndClose(resp.Body)
+			return fmt.Errorf("range %d-%d: unexpected Content-Encoding %q", task.Start, task.End, enc)
 		}
-		return d.readBody(rctx, resp, task, f, ws, body)
+		return d.readBody(rctx, resp, task, f, ws, resp.Body)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, maxHTTPStatusRetries, lastErr)
@@ -286,15 +260,27 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 	return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status", task.Start, task.End, maxHTTPStatusRetries)
 }
 
-// readBody reads the response body into f with chunked writes and
-// optional per-chunk verification.
-// body is the response body (potentially decompressed).
+// sleepCtx sleeps for d, returning false if ctx is cancelled first.
+// Uses a stopped timer so the runtime does not retain the heap entry
+// on the cancelled path.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Task, f fileWriter, ws *workerState, body io.ReadCloser) error {
 	defer drainAndClose(body)
 
-	// If the writer exposes the underlying bytes (mmap) and the slice
-	// is non-empty, we go zero-copy. Slice being nil indicates a
-	// fallback (raw pwrite) — we use the buffered path there.
+	// Zero-copy fast path when the writer exposes the underlying mmap slice.
 	if wb, ok := f.(mmapWriterBytes); ok {
 		if data := wb.Bytes(); data != nil {
 			return d.readBodyDirect(resp, task, wb, ws, data)
@@ -304,11 +290,10 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
 	cursor, end := task.Start, task.End
-	manifest := d.manifest // hoist out of per-Read hot loop
+	manifest := d.manifest
 	for {
 		n, rerr := body.Read(buf)
 		if n > 0 {
-			// Clamp n to remaining bytes; last partial read from server.
 			if remaining := end - cursor + 1; int64(n) > remaining {
 				n = int(remaining)
 			}
@@ -316,7 +301,6 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 				return err
 			}
 			cursor += int64(n)
-			// Progress is derived from ws.bytesDone via progress.snapshot().
 			if ws != nil {
 				ws.bytesDone.Store(cursor - task.Start)
 			}
@@ -338,9 +322,6 @@ func (d *Downloader) readBody(ctx context.Context, resp *http.Response, task Tas
 	}
 }
 
-// readBodyDirect is the zero-copy path: it reads HTTP response bytes
-// directly into the mmap'd output slice at task.Start, skipping the
-// intermediate buffer+memcpy.
 func (d *Downloader) readBodyDirect(resp *http.Response, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
 	taskEnd := task.End
 	if taskEnd+1 > int64(len(data)) {
@@ -349,7 +330,7 @@ func (d *Downloader) readBodyDirect(resp *http.Response, task Task, wb mmapWrite
 	taskStart := task.Start
 	taskSize := taskEnd - taskStart + 1
 	bufCap := int64(d.bufSize)
-	manifest := d.manifest // hoist out
+	manifest := d.manifest
 	cursor := int64(0)
 	for {
 		remaining := taskSize - cursor
@@ -383,28 +364,37 @@ func (d *Downloader) readBodyDirect(resp *http.Response, task Task, wb mmapWrite
 	}
 }
 
-// bufPool recycles per-worker read buffers. Allocates at the largest
-// expected size (256 KiB for files >100 MiB); smaller sizes reuse the
-// same pool by slicing.
+// bufSizeSmall and bufSizeLarge bound the pooled buffer size so the pool
+// always returns reusable buffers and oversized requests allocate fresh.
+const (
+	bufSizeSmall = 64 * 1024
+	bufSizeLarge = 256 * 1024
+)
+
+// bufPool recycles per-worker read buffers at bufSizeLarge.
 var bufPool = sync.Pool{
-	New: func() any { b := make([]byte, 256*1024); return &b },
+	New: func() any { b := make([]byte, bufSizeLarge); return &b },
 }
 
-// acquireBuf returns a buffer of at least length n, drawing from the pool.
+// acquireBuf returns a buffer of length n. Buffers up to bufSizeLarge are
+// served from the pool; larger requests allocate a fresh (non-pooled) slice
+// the caller releases by simply letting it be GC'd.
 func acquireBuf(n int) []byte {
-	bp := bufPool.Get().(*[]byte)
-	if cap(*bp) >= n {
+	if n <= bufSizeLarge {
+		bp := bufPool.Get().(*[]byte)
 		return (*bp)[:n]
 	}
-	// Pool buffer too small; allocate fresh.
 	return make([]byte, n)
 }
 
-// releaseBuf returns b to the pool, dropping oversized buffers.
+// releaseBuf returns a buffer to the pool when it is sized appropriately.
+// The b[:cap(b):cap(b)] slice expression keeps the backing array's capacity
+// matching the buffer's length so the next acquire can request any sub-slice.
 func releaseBuf(b []byte) {
-	if cap(b) > 1<<20 || cap(b) == 0 {
+	c := cap(b)
+	if c == 0 || c > bufSizeLarge {
 		return
 	}
-	bp := b[:cap(b):cap(b)]
+	bp := b[:c:c]
 	bufPool.Put(&bp)
 }

@@ -22,11 +22,11 @@ type Queue struct {
 
 // NewQueue returns a Queue with pre-allocated capacity for at least n tasks.
 func NewQueue(n int) *Queue {
-	cap := 8
-	for cap < n {
-		cap *= 2
+	size := 8
+	for size < n {
+		size *= 2
 	}
-	return &Queue{buf: make([]Task, cap)}
+	return &Queue{buf: make([]Task, size)}
 }
 
 // Push enqueues a task.

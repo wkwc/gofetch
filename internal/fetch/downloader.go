@@ -28,7 +28,7 @@ type Downloader struct {
 	client       *http.Client
 	autoConfig   AutoConfig
 	totalSize    int64
-	hashAlgo     string // "sha256" or "sha512"
+	hashAlgo     string
 	expectedHash string
 	resumePath   string
 	manifest     *Manifest
@@ -43,22 +43,20 @@ type Downloader struct {
 // Only set fields you care about — everything else is auto-tuned.
 type Options struct {
 	NoResume     bool
-	HashAlgo     string // "sha256" or "sha512"; empty = sha256
-	ExpectedHash string // hex hash to verify; empty = skip
+	HashAlgo     string
+	ExpectedHash string
 	Verbose      bool
 	Quiet        bool
-	Mirrors      []string // alternative URLs (mirrors) for failover
+	Mirrors      []string
 }
 
 // NewDownloader constructs a Downloader with auto-configured defaults.
 func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	ac := AutoConfigure(0)
-
 	algo := opt.HashAlgo
 	if algo == "" {
 		algo = "sha256"
 	}
-
 	d := &Downloader{
 		url:           rawURL,
 		mirrors:       opt.Mirrors,
@@ -90,6 +88,9 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 // don't help: startup overhead dominates. Use single-stream instead.
 const smallFileThreshold = 64 * 1024
 
+// Download attempts each URL in order, falling over to mirrors on error.
+// On success it calls finalize with the active progress tracker and file
+// writer; on failure it returns the most-recent error.
 func (d *Downloader) Download(ctx context.Context) error {
 	urls := append([]string{d.url}, d.mirrors...)
 	var lastErr error
@@ -123,32 +124,32 @@ func (d *Downloader) Download(ctx context.Context) error {
 			}
 		}
 
-		// Create file writer and progress tracker for this mirror attempt
 		f, err := allocateFileWriter(d.outFile, info.total, d.resumeEnabled)
 		if err != nil {
 			lastErr = fmt.Errorf("mirror %d (%s) file setup: %w", i+1, url, err)
 			continue
 		}
-		defer f.Close()
-
-		prog := newProgress(info.total, nil)
-		if d.resumeEnabled {
-			for _, t := range completed {
-				prog.add(t.Len())
+		// closeFile is invoked on every exit path so the file writer
+		// (and its mmap, if any) is released before the next mirror
+		// attempt allocates a fresh one.
+		success := false
+		closeFile := func() {
+			if !success {
+				_ = f.Close()
 			}
 		}
-
-		d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
+		defer closeFile()
 
 		if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
-			err = d.singleDownload(ctx, info.total, nil, f)
+			err = d.singleDownload(ctx, info.total, completed, f)
 		} else {
-			err = d.rangeDownload(ctx, info.total, nil, f)
+			err = d.rangeDownload(ctx, info.total, completed, f)
 		}
-
 		if err == nil {
-			d.url = urls[0]             // restore original URL for finalize
-			return d.finalize(nil, nil) // file already closed in download funcs
+			// Restore original URL so the summary refers to it.
+			d.url = urls[0]
+			success = true
+			return d.finalize(f, nil)
 		}
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, urls[i], err)
 		if d.resumeEnabled {

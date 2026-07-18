@@ -6,6 +6,23 @@ import (
 	"time"
 )
 
+// resumeResumeSeeds seeds the progress tracker with bytes that were
+// already on disk when we resumed. preDone survives worker.reset()
+// whereas per-worker bytesDone does not, so this avoids the
+// startup-progress-shrink race.
+func seedResumeBytes(prog *progress, completed []Task) {
+	if prog == nil {
+		return
+	}
+	var n int64
+	for _, t := range completed {
+		n += t.Len()
+	}
+	if n > 0 {
+		prog.add(n)
+	}
+}
+
 // rangeDownload fans the file out across N workers with a stealing monitor.
 // It seeds the work queue from ~1 MiB chunks of the uncompleted gaps,
 // runs workers until the queue drains, and signals completion.
@@ -16,13 +33,11 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		states[i] = newWorkerState()
 	}
 	prog := newProgress(total, states)
+	seedResumeBytes(prog, completed)
 
 	if total <= 0 {
 		return d.finalize(f, prog)
 	}
-	// Seed completed bytes into the workers' counters so the initial
-	// progress is accurate without an extra CAS on the global counter.
-	seedCompleted(states, completed)
 
 	// Try to load manifest
 	manifestPath := d.outFile + ".gofetch.manifest"
@@ -41,7 +56,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 
 	var workers sync.WaitGroup
 	workers.Add(d.workersN)
-	// Only allocate the save channel when resume is enabled.
+
 	var saveC chan struct{}
 	if d.resumePath != "" {
 		saveC = make(chan struct{}, d.workersN)
@@ -61,7 +76,6 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		d.monitor(monitorCtx, states, queue)
 	}()
 
-	// Always update progress bar so user sees activity, even with -q.
 	var progressC <-chan time.Time
 	if !d.quiet {
 		progressTicker := time.NewTicker(250 * time.Millisecond)
@@ -69,7 +83,6 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		progressC = progressTicker.C
 	}
 
-	// Only save resume state periodically when resume is enabled.
 	var resumeC <-chan time.Time
 	if d.resumePath != "" {
 		resumeTicker := time.NewTicker(5 * time.Second)
@@ -102,7 +115,6 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		close(done)
 	}()
 
-	// Print initial manifest path if verbose
 	if d.manifest != nil {
 		d.vlog("integrity checking enabled: %s", d.outFile+".gofetch.manifest")
 	}
@@ -128,34 +140,6 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 			d.maybeSaveResume(states)
 		case <-progressC:
 			d.printProgress(prog, false)
-		}
-	}
-}
-
-// seedCompleted primes a few worker states with synthetic byte counts from
-// resumed Tasks so that progress.snapshot() shows the initial bytesDone
-// without needing a CAS loop in the hot path.
-func seedCompleted(states []*workerState, completed []Task) {
-	if len(completed) == 0 {
-		return
-	}
-	var totalBytes int64
-	for _, t := range completed {
-		totalBytes += t.Len()
-	}
-	if totalBytes == 0 {
-		return
-	}
-	// Spread completed bytes roughly evenly across workers. The last
-	// worker absorbs any remainder so snapshot() reproduces totalBytes.
-	n := int64(len(states))
-	for i, ws := range states {
-		v := totalBytes / n
-		if i == len(states)-1 {
-			v = totalBytes - v*(n-1)
-		}
-		if v > 0 {
-			ws.bytesDone.Store(v)
 		}
 	}
 }
