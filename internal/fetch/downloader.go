@@ -120,7 +120,17 @@ func (d *Downloader) Download(ctx context.Context) error {
 			} else if st != nil {
 				completed = st.Completed
 				sortByStart(completed)
-				d.vlog("resumed from %d completed chunks", len(completed))
+				// Inherit the hash algo+value that was active when
+				// the sidecar was written, so a sha512 download
+				// surviving a process restart verifies with the
+				// right algorithm (we never persist just the digest).
+				if st.HashAlgo != "" && d.hashAlgo == "" {
+					d.hashAlgo = st.HashAlgo
+				}
+				if st.ExpectedHash != "" && d.expectedHash == "" {
+					d.expectedHash = st.ExpectedHash
+				}
+				d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
 			}
 		}
 

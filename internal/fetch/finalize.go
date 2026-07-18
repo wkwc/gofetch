@@ -9,7 +9,13 @@ import (
 // finalize prints the download summary, verifies hashes, and clears resume state.
 // f may be nil if already closed; prog is built here when nil so speed/bytes
 // reflect a fresh progress snapshot rather than dropping to (0,total).
-func (d *Downloader) finalize(f fileWriter, prog *progress) error {
+func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
+	// Always clear the resume sidecar on exit, success OR failure —
+	// leaving stale state on disk lets the next run silently skip
+	// ranges, so we err on the side of forcing a full re-download.
+	if d.resumePath != "" {
+		defer func() { clearResume(d.resumePath) }()
+	}
 	if prog == nil {
 		states := make([]*workerState, max(d.workersN, 1))
 		for i := range states {
@@ -24,8 +30,7 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 	}
 	d.printProgress(prog, true)
 
-	if d.quiet && d.expectedHash == "" {
-		clearResume(d.resumePath)
+	if d.quiet && d.expectedHash == "" && d.manifest == nil {
 		return nil
 	}
 
@@ -39,7 +44,6 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 	}
 
 	if d.quiet {
-		clearResume(d.resumePath)
 		return nil
 	}
 
@@ -75,7 +79,6 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) error {
 		fmt.Fprint(os.Stderr, "OK\n")
 	}
 
-	clearResume(d.resumePath)
 	return nil
 }
 

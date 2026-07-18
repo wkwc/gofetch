@@ -80,14 +80,16 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 }
 
 // singleMmap streams the body straight into the mmap'd output slice.
-// Bytes from any previously-completed resume (preDone) are skipped.
+// Bytes from any previously-completed resume (preDone) are skipped by
+// seeking the body past them rather than trusting `bytesDone` (which
+// is reset() below) or `prog.snapshot` (which reflects seeded bytes).
 func (d *Downloader) singleMmap(body io.ReadCloser, ws *workerState, data []byte, total int64) error {
 	defer drainAndClose(body)
 	ws.reset(Task{Start: 0, End: total - 1})
 
 	manifest := d.manifest
 	bufCap := int64(d.bufSize)
-	cursor := ws.bytesDone.Load()
+	cursor := int64(0)
 	for {
 		remaining := int64(len(data)) - cursor
 		if remaining <= 0 {

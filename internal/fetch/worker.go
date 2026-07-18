@@ -149,7 +149,11 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 	if remaining.Start > remaining.End {
 		return
 	}
-	key := task.End
+	// Key by the full task range (start<<32 | end) so two tasks sharing
+	// only their endpoint don't collide under a per-task retry budget.
+	// Tasks are >1 MiB in practice so the 63-bit packed key remains
+	// unambiguous.
+	key := (task.Start << 21) ^ task.End
 	d.retryMu.Lock()
 	if d.retryCount == nil {
 		d.retryCount = make(map[int64]int)
@@ -357,6 +361,9 @@ func (d *Downloader) readBodyDirect(body io.ReadCloser, task Task, wb mmapWriter
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
+				if cursor < taskSize {
+					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes", cursor, taskSize)
+				}
 				return nil
 			}
 			return rerr

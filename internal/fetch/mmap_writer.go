@@ -1,7 +1,9 @@
 package fetch
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 )
 
@@ -122,7 +124,20 @@ func allocateFileWriter(path string, size int64, resume bool) (fileWriter, error
 	}
 	if resume {
 		info, err := os.Stat(path)
-		if err != nil || info.Size() != size {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				// Fresh download, no partial file yet — write-only
+				// with truncation is correct.
+				return allocateRawFile(path, size, false)
+			}
+			// Some other stat failure (perm denied, vanished mid-call,
+			// etc). Refuse rather than silently truncating: the caller
+			// can re-run with --no-resume to disambiguate.
+			return nil, fmt.Errorf("stat %s for resume: %w (use --no-resume to retry)", path, err)
+		}
+		if info.Size() != size {
+			// File exists but wrong size — treat as fresh: truncate
+			// to expected size is correct here, but make it explicit.
 			return allocateRawFile(path, size, false)
 		}
 		// File exists at expected size: keep existing bytes.

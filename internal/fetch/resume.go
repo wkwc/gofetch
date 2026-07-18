@@ -10,11 +10,15 @@ import (
 )
 
 // ResumeState is the JSON document written next to a partial download.
+// HashAlgo/ExpectedHash carry algorithm metadata so resuming a sha512
+// download doesn't get demoted to sha256 by a reader that only sees
+// d.expectedHash on the receiver side.
 type ResumeState struct {
 	URL            string    `json:"url"`
 	OutFile        string    `json:"out_file"`
 	TotalSize      int64     `json:"total_size"`
-	ExpectedSHA256 string    `json:"expected_sha256,omitempty"`
+	HashAlgo       string    `json:"hash_algo,omitempty"`
+	ExpectedHash   string    `json:"expected_hash,omitempty"`
 	Completed      []Task    `json:"completed"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -31,7 +35,8 @@ func (d *Downloader) saveResume(completed []Task) error {
 	}
 	state := ResumeState{
 		URL: d.url, OutFile: d.outFile, TotalSize: d.totalSize,
-		ExpectedSHA256: d.expectedHash, Completed: dedupTasks(completed),
+		HashAlgo: d.hashAlgo, ExpectedHash: d.expectedHash,
+		Completed: dedupTasks(completed),
 		CreatedAt: d.startTime, UpdatedAt: time.Now(),
 	}
 	data, err := json.Marshal(state)
@@ -47,7 +52,9 @@ func (d *Downloader) saveResume(completed []Task) error {
 
 // loadResume reads and validates a state file. Returns nil state with
 // no error if the URL or size don't match (a different download, not
-// an error) or if the file does not exist.
+// an error) or if the file does not exist. Algo/expected_hash are
+// inherited from JSON tags backwards; on a legacy file lacking the
+// new fields, the caller should leave d.hashAlgo untouched.
 func loadResume(path, url string, totalSize int64) (*ResumeState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
