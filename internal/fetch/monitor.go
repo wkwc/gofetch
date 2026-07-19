@@ -91,5 +91,13 @@ func (ws *workerState) stealPlan(now time.Time) (Task, context.CancelFunc, bool)
 	if ws.stealFlag.Load() {
 		return Task{}, nil, false
 	}
-	return Task{Start: newStart, End: t.End}, *cf, true
+	// Atomically claim the cancel function: only steal if we can
+	// swap it to nil. This prevents a race where the worker finishes
+	// the task and stores a new cancel function before we call the
+	// old one.
+	cfPtr := ws.cancelFn.Load()
+	if cfPtr == nil || !ws.cancelFn.CompareAndSwap(cfPtr, nil) {
+		return Task{}, nil, false
+	}
+	return Task{Start: newStart, End: t.End}, *cfPtr, true
 }

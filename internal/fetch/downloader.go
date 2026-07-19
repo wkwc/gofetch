@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -155,7 +154,9 @@ func (d *Downloader) Download(ctx context.Context) error {
 
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, downloaded.err)
 		if d.resumeEnabled {
-			_ = os.Remove(d.outFile + ".gofetch.resume")
+			// Keep resume file on failure; it may contain valid progress
+			// for the NEXT mirror if content is identical. Only clear
+			// on success (in finalize) or on user request.
 		}
 	}
 	return lastErr

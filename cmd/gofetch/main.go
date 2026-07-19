@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -159,10 +160,22 @@ func autoDetectSidecar(ctx context.Context, rawURL string) (algo, hashHex string
 }
 
 // fetchSidecarURL fetches a sidecar hash file from a URL and parses it.
+// Requires HTTPS and rejects private/internal IP ranges to prevent SSRF.
 func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex string, err error) {
+	parsed, err := url.Parse(sidecarURL)
+	if err != nil {
+		return "", "", nil
+	}
+	// SSRF protection: require HTTPS and reject private/internal IPs
+	if parsed.Scheme != "https" {
+		return "", "", nil
+	}
+	if isPrivateOrInternalIP(parsed.Hostname()) {
+		return "", "", nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sidecarURL, nil)
 	if err != nil {
-		return "", "", nil // not an error — just not found
+		return "", "", nil
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -179,13 +192,46 @@ func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex stri
 	return parseSidecarContent(string(data), sidecarURL)
 }
 
+// isPrivateOrInternalIP checks if a hostname resolves to a private, loopback,
+// or link-local IP address. Returns true for IPs that should not be contacted
+// in a public download context (SSRF prevention).
+func isPrivateOrInternalIP(hostname string) bool {
+	ips, err := net.LookupIP(hostname)
+	if err != nil {
+		// If we can't resolve, be safe and reject
+		return true
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
 // readSidecarFile reads a local sidecar hash file and parses it.
+// Validates that the path is safe (no directory traversal).
 func readSidecarFile(path string) (algo, hashHex string, err error) {
-	data, err := os.ReadFile(path)
+	// Resolve to absolute path and ensure it doesn't escape the working directory
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve sidecar path: %w", err)
+	}
+	// Ensure the path is within the current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("get working dir: %w", err)
+	}
+	rel, err := filepath.Rel(cwd, abs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", "", fmt.Errorf("sidecar path %s escapes working directory", path)
+	}
+
+	data, err := os.ReadFile(abs)
 	if err != nil {
 		return "", "", fmt.Errorf("read sidecar: %w", err)
 	}
-	return parseSidecarContent(string(data), path)
+	return parseSidecarContent(string(data), abs)
 }
 
 // parseSidecarContent parses a sidecar hash file. Common formats:

@@ -71,7 +71,11 @@ func isTransient(err error) bool {
 		errors.Is(err, syscall.ECONNREFUSED),
 		errors.Is(err, syscall.ECONNABORTED),
 		errors.Is(err, syscall.EPIPE),
-		errors.Is(err, syscall.ETIMEDOUT):
+		errors.Is(err, syscall.ETIMEDOUT),
+		errors.Is(err, syscall.EAGAIN),
+		errors.Is(err, syscall.EWOULDBLOCK),
+		errors.Is(err, syscall.ENOBUFS),
+		errors.Is(err, syscall.ENOMEM):
 		return true
 	}
 	return false
@@ -83,7 +87,9 @@ func isRetryableHTTP(code int) bool {
 		http.StatusServiceUnavailable,
 		http.StatusBadGateway,
 		http.StatusGatewayTimeout,
-		http.StatusRequestTimeout:
+		http.StatusRequestTimeout,
+		http.StatusInternalServerError,
+		http.StatusInsufficientStorage:
 		return true
 	}
 	return false
