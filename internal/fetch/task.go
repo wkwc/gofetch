@@ -11,22 +11,27 @@ type Task struct {
 // Len returns the number of bytes in this range.
 func (t Task) Len() int64 { return t.End - t.Start + 1 }
 
-// Queue is a FIFO of Tasks backed by a ring buffer.
+// Queue is a FIFO of Tasks backed by a ring buffer with capacity limit.
 type Queue struct {
-	mu    sync.Mutex
-	buf   []Task
-	head  int
-	tail  int
-	count int
+	mu     sync.Mutex
+	buf    []Task
+	head   int
+	tail   int
+	count  int
+	maxCap int // maximum capacity (0 = unlimited)
 }
 
 // NewQueue returns a Queue with pre-allocated capacity for at least n tasks.
-func NewQueue(n int) *Queue {
+// If maxCap > 0, queue capacity is capped at maxCap; 0 means no limit.
+func NewQueue(n, maxCap int) *Queue {
 	size := 8
 	for size < n {
 		size *= 2
 	}
-	return &Queue{buf: make([]Task, size)}
+	if maxCap > 0 && size > maxCap {
+		size = maxCap
+	}
+	return &Queue{buf: make([]Task, size), maxCap: maxCap}
 }
 
 // Push enqueues a task.
@@ -77,7 +82,8 @@ func (q *Queue) Len() int {
 	return q.count
 }
 
-// grow ensures at least one free slot, doubling capacity if needed.
+// grow ensures at least one free slot, doubling capacity if needed
+// and respecting maxCap if set.
 func (q *Queue) grow() {
 	if q.count < len(q.buf) {
 		return
@@ -85,6 +91,12 @@ func (q *Queue) grow() {
 	n := len(q.buf) * 2
 	if n < 8 {
 		n = 8
+	}
+	if q.maxCap > 0 && n > q.maxCap {
+		n = q.maxCap
+	}
+	if n == len(q.buf) {
+		return // already at maxCap
 	}
 	newBuf := make([]Task, n)
 	if q.count > 0 {

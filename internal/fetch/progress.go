@@ -69,7 +69,7 @@ func (p *progress) snapshot() (int64, int64) {
 	for _, ws := range p.states {
 		sum += ws.bytesDone.Load()
 	}
-	// Add pre-completed bytes
+	// Add bytes completed in previous sessions (preDone)
 	sum += p.preDone.Load()
 	if sum > p.total {
 		sum = p.total

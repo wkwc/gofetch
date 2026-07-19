@@ -51,7 +51,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for _, gap := range uncompleted(Task{Start: 0, End: total - 1}, completed) {
 		seeds = append(seeds, splitRange(gap.Start, gap.Len(), chunkSize)...)
 	}
-	queue := NewQueue(len(seeds))
+	queue := NewQueue(len(seeds), len(seeds)*2)
 	queue.PushMany(seeds)
 
 	var workers sync.WaitGroup
