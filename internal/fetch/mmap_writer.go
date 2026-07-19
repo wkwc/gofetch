@@ -13,6 +13,8 @@ type fileWriter interface {
 	WriteAt(buf []byte, off int64) (int, error)
 	Sync() error
 	Close() error
+	Truncate(size int64) error
+	Seek(offset int64, whence int) (int64, error)
 }
 
 // rawFileWriter wraps *os.File for the fileWriter interface. Used as
@@ -29,6 +31,16 @@ func (r *rawFileWriter) Sync() error { return r.F.Sync() }
 
 // Close delegates to F.Close.
 func (r *rawFileWriter) Close() error { return r.F.Close() }
+
+// Truncate truncates the file to size.
+func (r *rawFileWriter) Truncate(size int64) error {
+	return r.F.Truncate(size)
+}
+
+// Seek sets the offset for the next Read/Write.
+func (r *rawFileWriter) Seek(offset int64, whence int) (int64, error) {
+	return r.F.Seek(offset, whence)
+}
 
 // Bytes returns nil for raw writers — the generic Read→buffer→write path
 // is used. Workers type-assert fileWriter to mmapWriterBytes to skip
@@ -96,6 +108,7 @@ func (m *mmapWriter) Bytes() []byte { return m.data }
 func (m *mmapWriter) Sync() error { return m.fd.Sync() }
 
 // Close unmaps + closes the fd. Safe to call multiple times.
+// Close unmaps + closes the fd. Safe to call multiple times.
 func (m *mmapWriter) Close() error {
 	if m.data == nil {
 		return nil
@@ -109,6 +122,36 @@ func (m *mmapWriter) Close() error {
 		return unmapErr
 	}
 	return closeErr
+}
+
+// Truncate truncates the mmap'd file to size.
+func (m *mmapWriter) Truncate(size int64) error {
+	if size < 0 || size > m.size {
+		return fmt.Errorf("mmap truncate: invalid size %d (max %d)", size, m.size)
+	}
+	if err := m.fd.Truncate(size); err != nil {
+		return err
+	}
+	if size < m.size {
+		// Remap to smaller size
+		unmapErr := munmapSys(m.data)
+		if unmapErr != nil {
+			return unmapErr
+		}
+		m.size = size
+		data, err := mmapSys(m.fd.Fd(), int(size))
+		if err != nil {
+			return err
+		}
+		m.data = data
+	}
+	return nil
+}
+
+// Seek sets the offset for the next Read/Write. Not typically used with
+// WriteAt, but provided for interface compliance.
+func (m *mmapWriter) Seek(offset int64, whence int) (int64, error) {
+	return m.fd.Seek(offset, whence)
 }
 
 // allocateFileWriter returns the fastest fileWriter for the given

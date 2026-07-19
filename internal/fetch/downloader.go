@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -153,14 +155,21 @@ func (d *Downloader) Download(ctx context.Context) error {
 		_ = f.Close()
 
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, downloaded.err)
+		// Mirror failed: the file may contain partial/corrupt data from
+		// this failed attempt. Truncate to 0 so the next mirror attempt
+		// starts fresh. Only keep the file if resume is enabled and
+		// we want to preserve progress for the SAME mirror URL.
 		if d.resumeEnabled {
-			// Keep resume file on failure; it may contain valid progress
-			// for the NEXT mirror if content is identical. Only clear
-			// on success (in finalize) or on user request.
+			f.Truncate(0)
+			f.Seek(0, io.SeekStart)
+		} else {
+			os.Remove(d.outFile)
 		}
 	}
 	return lastErr
 }
+
+// downloadFromMirror attempts to download from a single URL using either
 
 // downloadFromMirror attempts to download from a single URL using either
 // range or single-stream mode. Returns (true, nil) on success.
