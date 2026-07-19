@@ -64,9 +64,7 @@ func (m *Manifest) VerifyChunk(start, end int64, data []byte) error {
 	if m == nil {
 		return nil
 	}
-	if m.index == nil {
-		m.buildIndex()
-	}
+	m.once.Do(m.buildIndex)
 	if endMap, ok := m.index[start]; ok {
 		if expected, ok := endMap[end]; ok {
 			return verifyHash(data, m.Algo, expected)

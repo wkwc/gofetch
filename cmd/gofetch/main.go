@@ -65,15 +65,11 @@ func run() int {
 	}
 	rawURL := flag.Arg(0)
 
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		fmt.Fprintln(os.Stderr, "gofetch: invalid URL:", rawURL)
+	if err := validateURL(rawURL); err != nil {
+		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		fmt.Fprintln(os.Stderr, "gofetch: unsupported scheme:", u.Scheme, "(use http or https)")
-		return 1
-	}
+	u, _ := url.Parse(rawURL)
 
 	out := *outPath
 	if out == "" {
@@ -89,6 +85,13 @@ func run() int {
 		mirrors = strings.Split(*mirrorsFlag, ",")
 		for i := range mirrors {
 			mirrors[i] = strings.TrimSpace(mirrors[i])
+			// Validate each mirror URL with the same SSRF guards so
+			// operators cannot accidentally point a mirror at an
+			// internal resource.
+			if err := validateURL(mirrors[i]); err != nil {
+				fmt.Fprintln(os.Stderr, "gofetch: mirror", i+1, err)
+				return 1
+			}
 		}
 	}
 
@@ -164,45 +167,74 @@ func autoDetectSidecar(ctx context.Context, rawURL string) (algo, hashHex string
 func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex string, err error) {
 	parsed, err := url.Parse(sidecarURL)
 	if err != nil {
-		return "", "", nil
+		return "", "", fmt.Errorf("invalid sidecar URL: %w", err)
 	}
 	// SSRF protection: require HTTPS and reject private/internal IPs
 	if parsed.Scheme != "https" {
-		return "", "", nil
+		return "", "", fmt.Errorf("sidecar URL must use HTTPS")
 	}
 	if isPrivateOrInternalIP(parsed.Hostname()) {
-		return "", "", nil
+		return "", "", fmt.Errorf("sidecar URL host %q resolves to a private/internal address (SSRF guard)", parsed.Hostname())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sidecarURL, nil)
 	if err != nil {
-		return "", "", nil
+		return "", "", fmt.Errorf("create request: %w", err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", "", nil
+		return "", "", fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return "", "", nil
+		return "", "", fmt.Errorf("sidecar HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if err != nil {
-		return "", "", nil
+		return "", "", fmt.Errorf("read sidecar: %w", err)
 	}
 	return parseSidecarContent(string(data), sidecarURL)
 }
 
+// validateURL ensures the URL is fetchable in a public-downloader
+// context: scheme is http or https, AND the resolved IP is not a
+// private/loopback/link-local/unspecified address. DNS failures REJECT
+// the URL — an attacker who can fail DNS resolution (or trick
+// getaddrinfo into short-timeout behaviour) must not be able to bypass
+// the internal-IP check by exploiting a transient lookup error.
+func validateURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid URL: %s", rawURL)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("unsupported scheme: %s (use http or https)", u.Scheme)
+	}
+	// SSRF: reject URLs that resolve to loopback / private / link-local /
+	// multicast / unspecified IPs. Resolved once at startup so DNS
+	// rebound during a long download can't pivot the connection
+	// mid-stream into an internal host (DNS rebinding).
+	if isPrivateOrInternalIP(u.Hostname()) {
+		return fmt.Errorf("URL host %q resolves to a private/internal address (SSRF guard)",
+			u.Hostname())
+	}
+	return nil
+}
+
 // isPrivateOrInternalIP checks if a hostname resolves to a private, loopback,
-// or link-local IP address. Returns true for IPs that should not be contacted
-// in a public download context (SSRF prevention).
+// link-local, multicast, or unspecified IP address.
+//
+// Conservative: DNS-resolution failure -> reject. An operator who's
+// pointed gofetch at a down host should not get a silent fallback to
+// "no host validation"; failure must surface as an error.
 func isPrivateOrInternalIP(hostname string) bool {
 	ips, err := net.LookupIP(hostname)
 	if err != nil {
-		// If we can't resolve, be safe and reject
 		return true
 	}
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		if ip.IsLoopback() || ip.IsPrivate() ||
+			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			ip.IsMulticast() || ip.IsUnspecified() {
 			return true
 		}
 	}

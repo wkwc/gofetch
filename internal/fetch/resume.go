@@ -3,8 +3,10 @@ package fetch
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -44,8 +46,31 @@ func (d *Downloader) saveResume(completed []Task) error {
 		return err
 	}
 	tmp := d.resumePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
 		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	// fsync parent dir for crash durability
+	parent := filepath.Dir(d.resumePath)
+	if parent != "" {
+		if df, err := os.Open(parent); err == nil {
+			df.Sync()
+			df.Close()
+		}
 	}
 	return os.Rename(tmp, d.resumePath)
 }
@@ -74,10 +99,23 @@ func loadResume(path, url string, totalSize int64) (*ResumeState, error) {
 }
 
 // clearResume removes the resume state file. No-op if path is empty.
-func clearResume(path string) {
-	if path != "" {
-		_ = os.Remove(path)
+// Rejects symlinks to prevent attacker from deleting arbitrary files
+// via a pre-placed symlink at the resume path.
+func clearResume(path string) error {
+	if path == "" {
+		return nil
 	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to remove symlink at %s", path)
+	}
+	return os.Remove(path)
 }
 
 // sortByStart sorts tasks in-place by Start ascending.
