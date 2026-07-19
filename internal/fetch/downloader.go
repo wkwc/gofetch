@@ -170,8 +170,6 @@ func (d *Downloader) Download(ctx context.Context) error {
 }
 
 // downloadFromMirror attempts to download from a single URL using either
-
-// downloadFromMirror attempts to download from a single URL using either
 // range or single-stream mode. Returns (true, nil) on success.
 func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, info probeInfo, completed []Task, f fileWriter) mirrorResult {
 	// Temporarily set d.url so runTask/workerLoop use the active mirror.
