@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -37,7 +36,13 @@ type Downloader struct {
 
 	lastResumeSave atomic.Int64
 	retryMu        sync.Mutex
-	retryCount     map[int64]int
+	retryCount     map[[2]int64]int
+
+	// completed accumulates finished ranges for resume sidecars.
+	// Seeded from loadResume; updated on every successful task so
+	// worker.reset() cannot drop progress before the next save.
+	completedMu sync.Mutex
+	completed   []Task
 }
 
 // Options configures NewDownloader. Zero values enable auto-optimization.
@@ -66,10 +71,18 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		autoConfig:    ac,
 		hashAlgo:      opt.HashAlgo,
 		expectedHash:  opt.ExpectedHash,
-		resumePath:    resumePath(outPath),
 	}
+	// Only set resumePath when resume is enabled so saves/tickers
+	// and sidecar cleanup stay fully disabled under --no-resume.
+	if d.resumeEnabled {
+		d.resumePath = resumePath(outPath)
+	}
+	// Client.Timeout must be 0: it covers the entire body transfer and
+	// would kill multi-MB downloads after a few seconds. Per-phase
+	// limits live on the Transport (dial / TLS / response headers);
+	// overall deadline is the caller's context.
 	d.client = &http.Client{
-		Timeout:   ac.Timeout,
+		Timeout:   0,
 		Transport: newAutoTransport(ac),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
@@ -118,9 +131,11 @@ func (d *Downloader) Download(ctx context.Context) error {
 			if err != nil {
 				d.vlog("corrupt resume file, restarting from scratch: %v", err)
 				clearResume(d.resumePath)
+				d.seedCompleted(nil)
 			} else if st != nil {
 				completed = st.Completed
 				sortByStart(completed)
+				d.seedCompleted(completed)
 				// Inherit the hash algo+value that was active when
 				// the sidecar was written, so a sha512 download
 				// surviving a process restart verifies with the
@@ -132,6 +147,8 @@ func (d *Downloader) Download(ctx context.Context) error {
 					d.expectedHash = st.ExpectedHash
 				}
 				d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
+			} else {
+				d.seedCompleted(nil)
 			}
 		}
 
@@ -148,8 +165,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 		downloaded := d.downloadFromMirror(ctx, activeURL, info, completed, f)
 		if downloaded.ok() {
 			d.url = origURL
-			// finalize already called f.Sync() + f.Close(); return
-			// its result directly — do NOT close f again here.
+			// Single ownership of Sync/Close/hash: leaves never finalize.
 			return d.finalize(f, nil)
 		}
 		_ = f.Close()
@@ -157,11 +173,12 @@ func (d *Downloader) Download(ctx context.Context) error {
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, downloaded.err)
 		// Mirror failed: the file may contain partial/corrupt data from
 		// this failed attempt. Truncate to 0 so the next mirror attempt
-		// starts fresh. Only keep the file if resume is enabled and
-		// we want to preserve progress for the SAME mirror URL.
+		// starts fresh. Resume sidecars are URL-keyed so progress from
+		// this mirror cannot be reused on a different URL anyway.
 		if d.resumeEnabled {
-			f.Truncate(0)
-			f.Seek(0, io.SeekStart)
+			_ = os.Truncate(d.outFile, 0)
+			d.seedCompleted(nil)
+			clearResume(d.resumePath)
 		} else {
 			os.Remove(d.outFile)
 		}

@@ -36,7 +36,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	seedResumeBytes(prog, completed)
 
 	if total <= 0 {
-		return d.finalize(f, prog)
+		// Empty/unknown-size range path: Download will finalize.
+		_ = prog
+		return nil
 	}
 
 	// Try to load manifest
@@ -51,7 +53,8 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for _, gap := range uncompleted(Task{Start: 0, End: total - 1}, completed) {
 		seeds = append(seeds, splitRange(gap.Start, gap.Len(), chunkSize)...)
 	}
-	queue := NewQueue(len(seeds), len(seeds)*2)
+	// Unbounded queue: steal/retry must never drop or livelock at a cap.
+	queue := NewQueue(len(seeds), 0)
 	queue.PushMany(seeds)
 
 	var workers sync.WaitGroup
@@ -107,6 +110,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 					}
 					break
 				}
+				d.recordCompleted(task)
 			}
 		}
 		if saveC != nil {
@@ -123,7 +127,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		select {
 		case <-ctx.Done():
 			if d.resumePath != "" {
-				d.maybeSaveResume(states)
+				d.maybeSaveResume()
 			}
 			<-done
 			return ctx.Err()
@@ -135,9 +139,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 			}
 			return nil
 		case <-saveC:
-			d.maybeSaveResume(states)
+			d.maybeSaveResume()
 		case <-resumeC:
-			d.maybeSaveResume(states)
+			d.maybeSaveResume()
 		case <-progressC:
 			d.printProgress(prog, false)
 		}

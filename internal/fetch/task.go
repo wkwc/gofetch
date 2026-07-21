@@ -23,6 +23,8 @@ type Queue struct {
 
 // NewQueue returns a Queue with pre-allocated capacity for at least n tasks.
 // If maxCap > 0, queue capacity is capped at maxCap; 0 means no limit.
+// Prefer maxCap == 0 for download work queues so steal/retry never
+// silently drop tasks or livelock when growth is capped.
 func NewQueue(n, maxCap int) *Queue {
 	size := 8
 	for size < n {
@@ -34,10 +36,14 @@ func NewQueue(n, maxCap int) *Queue {
 	return &Queue{buf: make([]Task, size), maxCap: maxCap}
 }
 
-// Push enqueues a task.
+// Push enqueues a task. Grows unbounded when maxCap is 0; when capped
+// and full, grows past maxCap rather than overwriting (maxCap is a
+// soft target, never a silent-drop limit).
 func (q *Queue) Push(t Task) {
 	q.mu.Lock()
-	q.grow()
+	if q.count >= len(q.buf) {
+		q.growForced()
+	}
 	q.buf[q.tail] = t
 	q.tail = (q.tail + 1) % len(q.buf)
 	q.count++
@@ -52,7 +58,7 @@ func (q *Queue) PushMany(tasks []Task) {
 	q.mu.Lock()
 	needed := q.count + len(tasks)
 	for len(q.buf) < needed {
-		q.grow()
+		q.growForced()
 	}
 	for _, t := range tasks {
 		q.buf[q.tail] = t
@@ -82,21 +88,15 @@ func (q *Queue) Len() int {
 	return q.count
 }
 
-// grow ensures at least one free slot, doubling capacity if needed
-// and respecting maxCap if set.
-func (q *Queue) grow() {
-	if q.count < len(q.buf) {
-		return
-	}
+// growForced doubles capacity (or grows to count+1), ignoring maxCap.
+// Used when we must accept a task rather than drop or livelock.
+func (q *Queue) growForced() {
 	n := len(q.buf) * 2
 	if n < 8 {
 		n = 8
 	}
-	if q.maxCap > 0 && n > q.maxCap {
-		n = q.maxCap
-	}
-	if n == len(q.buf) {
-		return // already at maxCap
+	if n <= q.count {
+		n = q.count + 1
 	}
 	newBuf := make([]Task, n)
 	if q.count > 0 {

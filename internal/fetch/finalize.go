@@ -9,6 +9,10 @@ import (
 // finalize prints the download summary, verifies hashes, and clears resume state.
 // f may be nil if already closed; prog is built here when nil so speed/bytes
 // reflect a fresh progress snapshot rather than dropping to (0,total).
+//
+// Ownership: only Download (or a leaf that is the sole exit path) should call
+// finalize. Always Sync+Close before integrity checks so verification reads
+// durable bytes. Quiet mode suppresses UI only — never skips Sync/Close/hash.
 func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 	// Always clear the resume sidecar on exit, success OR failure —
 	// leaving stale state on disk lets the next run silently skip
@@ -28,10 +32,8 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 			prog.add(d.totalSize)
 		}
 	}
-	d.printProgress(prog, true)
-
-	if d.quiet && d.expectedHash == "" && d.manifest == nil {
-		return nil
+	if !d.quiet {
+		d.printProgress(prog, true)
 	}
 
 	if f != nil {
@@ -40,6 +42,37 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 		}
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("close: %w", err)
+		}
+	}
+
+	// Integrity checks always run (quiet only suppresses messages).
+	if d.manifest != nil {
+		if !d.quiet {
+			fmt.Fprint(os.Stderr, "  manifest: verifying... ")
+		}
+		if err := d.manifest.VerifyFull(d.outFile); err != nil {
+			if !d.quiet {
+				fmt.Fprint(os.Stderr, "FAILED\n")
+			}
+			return err
+		}
+		if !d.quiet {
+			fmt.Fprint(os.Stderr, "OK\n")
+		}
+	}
+
+	if d.expectedHash != "" {
+		if !d.quiet {
+			fmt.Fprintf(os.Stderr, "  hash %s: verifying... ", d.hashAlgo)
+		}
+		if err := verifyFileHash(d.outFile, d.hashAlgo, d.expectedHash); err != nil {
+			if !d.quiet {
+				fmt.Fprint(os.Stderr, "FAILED\n")
+			}
+			return err
+		}
+		if !d.quiet {
+			fmt.Fprint(os.Stderr, "OK\n")
 		}
 	}
 
@@ -61,24 +94,6 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", humanBytes(int64(speed)))
 	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workersN)
 
-	if d.manifest != nil {
-		fmt.Fprint(os.Stderr, "  manifest: verifying... ")
-		if err := d.manifest.VerifyFull(d.outFile); err != nil {
-			fmt.Fprint(os.Stderr, "FAILED\n")
-			return err
-		}
-		fmt.Fprint(os.Stderr, "OK\n")
-	}
-
-	if d.expectedHash != "" {
-		fmt.Fprintf(os.Stderr, "  hash %s: verifying... ", d.hashAlgo)
-		if err := verifyFileHash(d.outFile, d.hashAlgo, d.expectedHash); err != nil {
-			fmt.Fprint(os.Stderr, "FAILED\n")
-			return err
-		}
-		fmt.Fprint(os.Stderr, "OK\n")
-	}
-
 	return nil
 }
 
@@ -98,7 +113,7 @@ func formatDuration(d time.Duration) string {
 // maybeSaveResume writes the resume state if at least 1 second has
 // passed since the last save. Cheap throttle to avoid I/O storms.
 // No-op when resume is disabled.
-func (d *Downloader) maybeSaveResume(states []*workerState) {
+func (d *Downloader) maybeSaveResume() {
 	if d.resumePath == "" {
 		return
 	}
@@ -106,38 +121,37 @@ func (d *Downloader) maybeSaveResume(states []*workerState) {
 	if last != 0 && time.Duration(time.Now().UnixNano()-last) < time.Second {
 		return
 	}
-	if d.saveResume(collectCompleted(states)) == nil {
+	if d.saveResume(d.snapshotCompleted()) == nil {
 		d.lastResumeSave.Store(time.Now().UnixNano())
 	}
 }
 
-// collectCompleted gathers all fully-completed, non-stolen ranges.
-// A `Task` is reported as completed only if `taskGen` matches a
-// generation we observed *with* its `bytesDone`, so a worker that has
-// already `reset()` to a new task is correctly skipped. A bare double
-// `Load()` of the task pointer is insufficient — `reset()` swaps the
-// pointer before incrementing the generation, so the pointer can
-// match even though the underlying assignment is to a new Task.
-func collectCompleted(states []*workerState) []Task {
-	var out []Task
-	for _, ws := range states {
-		gen := ws.taskGen.Load()
-		t := ws.curTask.Load()
-		if t == nil {
-			continue
-		}
-		done := ws.bytesDone.Load()
-		// Re-check taskGen: if a worker `reset()` between our
-		// snapshot and use, the bytesDone we observed belongs to
-		// the prior task and is not safe to publish as the new
-		// task's progress.
-		if ws.taskGen.Load() != gen {
-			continue
-		}
-		if done >= t.Len() && !ws.stealFlag.Load() {
-			out = append(out, *t)
-		}
+// recordCompleted appends a fully finished range to the durable
+// accumulator used by resume sidecars. Seeded from loadResume at
+// start so prior progress is never dropped when workers reset.
+func (d *Downloader) recordCompleted(t Task) {
+	if d.resumePath == "" {
+		return
 	}
+	d.completedMu.Lock()
+	d.completed = append(d.completed, t)
+	d.completed = dedupTasks(d.completed)
+	d.completedMu.Unlock()
+}
+
+// seedCompleted replaces the accumulator (used after loading a resume file).
+func (d *Downloader) seedCompleted(tasks []Task) {
+	d.completedMu.Lock()
+	d.completed = dedupTasks(append([]Task(nil), tasks...))
+	d.completedMu.Unlock()
+}
+
+// snapshotCompleted returns a copy of accumulated completed ranges.
+func (d *Downloader) snapshotCompleted() []Task {
+	d.completedMu.Lock()
+	defer d.completedMu.Unlock()
+	out := make([]Task, len(d.completed))
+	copy(out, d.completed)
 	return out
 }
 

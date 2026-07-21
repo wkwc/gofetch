@@ -10,9 +10,17 @@ import (
 	"strings"
 )
 
-// drainAndClose discards any remaining bytes and closes the body, so the
-// underlying connection can be reused by http.Transport.
-func drainAndClose(body io.ReadCloser) { _, _ = io.Copy(io.Discard, body); body.Close() }
+// drainLimit caps how much of a rejected response body we will read
+// before closing. Bounds hang/bandwidth abuse on huge 4xx/5xx bodies
+// while still allowing connection reuse for modest leftovers.
+const drainLimit = 32 << 10 // 32 KiB
+
+// drainAndClose discards a bounded amount of remaining bytes and closes
+// the body so the underlying connection can be reused by http.Transport.
+func drainAndClose(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, drainLimit))
+	body.Close()
+}
 
 // probeInfo is what we learn about a server before downloading.
 type probeInfo struct {

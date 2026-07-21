@@ -2,4 +2,10 @@
 /build/
 /.build/
 /gofetch
+/benchserver
 *.test
+/tmp/
+*.bin
+*.gofetch.resume
+*.gofetch.manifest
+*.gofetch.resume.tmp

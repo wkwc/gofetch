@@ -117,9 +117,9 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
 	}
-	if !*quiet {
-		fmt.Println(out)
-	}
+	// Always print the output path on success (quiet: filename only;
+	// verbose/normal: summary already went to stderr in finalize).
+	fmt.Println(out)
 	return 0
 }
 

@@ -295,3 +295,72 @@ func TestProbeServerError(t *testing.T) {
 		t.Error("expected probe error for 500, got nil")
 	}
 }
+
+// TestQuietModeStillVerifiesHash ensures -q never skips integrity checks.
+func TestQuietModeStillVerifiesHash(t *testing.T) {
+	payload := makePayload(256 * 1024)
+	srv := newRangeServer(t, payload)
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+
+	// Bad hash must fail even in quiet mode.
+	d := NewDownloader(srv.URL, outFile, Options{
+		Quiet:        true,
+		HashAlgo:     "sha256",
+		ExpectedHash: "0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := d.Download(ctx); err == nil {
+		t.Fatal("expected hash mismatch error in quiet mode")
+	}
+
+	// Good hash must succeed in quiet mode (and Sync/Close the file).
+	d2 := NewDownloader(srv.URL, outFile, Options{
+		Quiet:        true,
+		NoResume:     true,
+		HashAlgo:     "sha256",
+		ExpectedHash: sha256Hex(payload),
+	})
+	if err := d2.Download(ctx); err != nil {
+		t.Fatalf("quiet+good hash: %v", err)
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if sha256Hex(got) != sha256Hex(payload) {
+		t.Fatal("content mismatch after quiet download")
+	}
+}
+
+// TestShortRangeBodyErrors ensures a truncated 206 is not treated as success.
+func TestShortRangeBodyErrors(t *testing.T) {
+	payload := makePayload(64 * 1024)
+	// Serve only the first half of any range request, then close.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(payload)-1, len(payload)))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)/2))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(payload[:len(payload)/2])
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+	d := NewDownloader(srv.URL, outFile, Options{NoResume: true, Quiet: true})
+	// Force single worker path size still uses ranges for 64KiB (threshold is 64KiB exclusive).
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := d.Download(ctx)
+	if err == nil {
+		t.Fatal("expected short-body error, got success")
+	}
+}

@@ -125,9 +125,13 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 		})
 	}
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
+		Proxy:             http.ProxyFromEnvironment,
+		DialContext:       dialer.DialContext,
+		ForceAttemptHTTP2: true,
+		// Never auto-negotiate gzip: transparent decompression breaks
+		// Range byte-offset math and strips Content-Encoding so our
+		// identity guard would not fire.
+		DisableCompression:    true,
 		MaxIdleConns:          256,
 		MaxIdleConnsPerHost:   maxIdlePerHost,
 		IdleConnTimeout:       90 * time.Second,

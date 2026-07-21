@@ -76,7 +76,12 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 			break
 		}
 	}
-	return d.finalize(f, prog)
+	if total > 0 && cursor < total {
+		return fmt.Errorf("server closed connection early: got %d of expected %d bytes", cursor, total)
+	}
+	// Download owns finalize (Sync/Close/hash); do not double-close here.
+	_ = prog
+	return nil
 }
 
 // singleMmap streams the body straight into the mmap'd output slice.
@@ -112,6 +117,9 @@ func (d *Downloader) singleMmap(body io.ReadCloser, ws *workerState, data []byte
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
+				if total > 0 && cursor < total {
+					return fmt.Errorf("server closed connection early: got %d of expected %d bytes", cursor, total)
+				}
 				return nil
 			}
 			return rerr

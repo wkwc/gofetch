@@ -108,7 +108,6 @@ func (m *mmapWriter) Bytes() []byte { return m.data }
 func (m *mmapWriter) Sync() error { return m.fd.Sync() }
 
 // Close unmaps + closes the fd. Safe to call multiple times.
-// Close unmaps + closes the fd. Safe to call multiple times.
 func (m *mmapWriter) Close() error {
 	if m.data == nil {
 		return nil

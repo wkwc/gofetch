@@ -140,6 +140,9 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 				return
 			}
 		default:
+			// Task fully written — record for resume before the worker
+			// pops the next task and resets its live state.
+			d.recordCompleted(task)
 			if saveC != nil {
 				select {
 				case saveC <- struct{}{}:
@@ -155,14 +158,12 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 	if remaining.Start > remaining.End {
 		return
 	}
-	// Key by the full task range (start<<32 | end) so two tasks sharing
-	// only their endpoint don't collide under a per-task retry budget.
-	// Tasks are >1 MiB in practice so the 63-bit packed key remains
-	// unambiguous.
-	key := (task.Start << 32) | task.End
+	// Key by the full [Start,End] pair so large-file offsets (>4 GiB)
+	// never collide the way a 32-bit packed int64 key would.
+	key := [2]int64{task.Start, task.End}
 	d.retryMu.Lock()
 	if d.retryCount == nil {
-		d.retryCount = make(map[int64]int)
+		d.retryCount = make(map[[2]int64]int)
 	}
 	n := d.retryCount[key]
 	if d.autoConfig.RetryMax > 0 && n >= d.autoConfig.RetryMax {
@@ -205,9 +206,6 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 
 	// Pre-compute Range header once per task (avoids per-attempt allocations).
 	rangeHeader := "bytes=" + strconv.FormatInt(task.Start, 10) + "-" + strconv.FormatInt(task.End, 10)
-	// Range downloads do not request gzip: a gzipped Range response
-	// misaligns byte offsets. Accept-Encoding is always empty.
-	const acceptEncoding = ""
 
 	var lastErr error
 	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
@@ -217,9 +215,9 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 		}
 		req.Header.Set("Range", rangeHeader)
 		req.Header.Set("User-Agent", userAgent)
-		if acceptEncoding != "" {
-			req.Header.Set("Accept-Encoding", acceptEncoding)
-		}
+		// Explicit identity + DisableCompression on the transport:
+		// never let a proxy inject gzip that would misalign Range offsets.
+		req.Header.Set("Accept-Encoding", "identity")
 
 		resp, err := d.client.Do(req)
 		if err != nil {
@@ -322,6 +320,11 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
+				// Inclusive End: full range requires cursor == end+1.
+				if cursor <= end {
+					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes",
+						cursor-task.Start, task.Len())
+				}
 				return nil
 			}
 			return rerr
