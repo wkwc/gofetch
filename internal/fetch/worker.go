@@ -269,12 +269,15 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 		}
 		// Require Content-Range to match the requested task so a CDN
 		// cannot hand us a different slice written at task.Start.
-		if cr := resp.Header.Get("Content-Range"); cr != "" {
-			start, end, _, ok := parseContentRange(cr)
-			if !ok || start != task.Start || end != task.End {
-				drainAndClose(resp.Body)
-				return fmt.Errorf("range %d-%d: Content-Range mismatch %q", task.Start, task.End, cr)
-			}
+		cr := resp.Header.Get("Content-Range")
+		if cr == "" {
+			drainAndClose(resp.Body)
+			return fmt.Errorf("range %d-%d: 206 missing Content-Range", task.Start, task.End)
+		}
+		start, end, _, ok := parseContentRange(cr)
+		if !ok || start != task.Start || end != task.End {
+			drainAndClose(resp.Body)
+			return fmt.Errorf("range %d-%d: Content-Range mismatch %q", task.Start, task.End, cr)
 		}
 		return d.readBody(rctx, task, f, ws, resp.Body)
 	}

@@ -3,10 +3,8 @@ package fetch
 import (
 	"math"
 	"math/rand/v2"
-	"net"
 	"net/http"
 	"runtime"
-	"syscall"
 	"time"
 )
 
@@ -110,23 +108,11 @@ const (
 // (TCP_NODELAY, TCP_FASTOPEN, TCP_NOTSENT_LOWAT, faster keepalive).
 func newAutoTransport(ac AutoConfig) *http.Transport {
 	maxIdlePerHost := max(ac.Workers, 4)
-	dialer := &net.Dialer{
-		Timeout:   ac.Timeout,
-		KeepAlive: 10 * time.Second,
-	}
-	dialer.Control = func(network, address string, c syscall.RawConn) error {
-		return c.Control(func(fd uintptr) {
-			syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, 1)
-			// TCP_FASTOPEN (Linux 4.11+) — ignored if unavailable.
-			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpFastOpen, 1)
-			// TCP_NOTSENT_LOWAT (Linux 4.15+) — wires kernel-side pacing.
-			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpNotSentLowat, tcpNotSentLowatV)
-			tcpKeepalive(fd)
-		})
-	}
 	return &http.Transport{
-		Proxy:             http.ProxyFromEnvironment,
-		DialContext:       dialer.DialContext,
+		Proxy: http.ProxyFromEnvironment,
+		// SSRF: resolve + reject private IPs on every dial (DNS rebind safe).
+		// Socket tuning (NODELAY/keepalive) is applied inside DialContextSafe.
+		DialContext:       DialContextSafe,
 		ForceAttemptHTTP2: true,
 		// Never auto-negotiate gzip: transparent decompression breaks
 		// Range byte-offset math and strips Content-Encoding so our

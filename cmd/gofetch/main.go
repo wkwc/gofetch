@@ -15,7 +15,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/local/gofetch/internal/fetch"
 )
@@ -180,7 +180,9 @@ func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex stri
 	if err != nil {
 		return "", "", fmt.Errorf("create request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Same SSRF-hardened dial + redirect policy as the main downloader.
+	client := fetch.NewSafeClient(15 * time.Second)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("request failed: %w", err)
 	}
@@ -227,18 +229,7 @@ func validateURL(rawURL string) error {
 // pointed gofetch at a down host should not get a silent fallback to
 // "no host validation"; failure must surface as an error.
 func isPrivateOrInternalIP(hostname string) bool {
-	ips, err := net.LookupIP(hostname)
-	if err != nil {
-		return true
-	}
-	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() ||
-			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			ip.IsMulticast() || ip.IsUnspecified() {
-			return true
-		}
-	}
-	return false
+	return fetch.HostIsPrivate(hostname)
 }
 
 // readSidecarFile reads a local sidecar hash file and parses it.

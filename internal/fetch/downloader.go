@@ -5,7 +5,6 @@ package fetch
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -82,14 +81,9 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	// limits live on the Transport (dial / TLS / response headers);
 	// overall deadline is the caller's context.
 	d.client = &http.Client{
-		Timeout:   0,
-		Transport: newAutoTransport(ac),
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 3 {
-				return errors.New("too many redirects")
-			}
-			return nil
-		},
+		Timeout:       0,
+		Transport:     newAutoTransport(ac),
+		CheckRedirect: CheckRedirectSafe,
 	}
 	return d
 }

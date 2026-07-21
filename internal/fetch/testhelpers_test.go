@@ -11,6 +11,11 @@ import (
 	"testing"
 )
 
+func init() {
+	// httptest binds 127.0.0.1; production SSRF dial still blocks loopback.
+	AllowLoopbackDial = true
+}
+
 // makePayload generates n random bytes for test fixtures.
 func makePayload(n int) []byte {
 	b := make([]byte, n)

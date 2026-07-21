@@ -83,6 +83,12 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 	if total > 0 && cursor < total {
 		return fmt.Errorf("server closed connection early: got %d of expected %d bytes", cursor, total)
 	}
+	// Unknown-size downloads: drop any stale tail from a larger prior file.
+	if total <= 0 && cursor >= 0 {
+		if err := f.Truncate(cursor); err != nil {
+			return fmt.Errorf("truncate to %d: %w", cursor, err)
+		}
+	}
 	// Download owns finalize (Sync/Close/hash); do not double-close here.
 	_ = prog
 	return nil
