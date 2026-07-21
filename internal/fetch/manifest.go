@@ -60,6 +60,7 @@ func LoadManifest(path string) (*Manifest, error) {
 
 // VerifyChunk checks that data matches the expected hash for [start, end].
 // Returns nil if no matching chunk entry exists (manifest is advisory).
+// Prefer VerifyRange when the download buffer is smaller than the chunk.
 func (m *Manifest) VerifyChunk(start, end int64, data []byte) error {
 	if m == nil {
 		return nil
@@ -68,6 +69,31 @@ func (m *Manifest) VerifyChunk(start, end int64, data []byte) error {
 	if endMap, ok := m.index[start]; ok {
 		if expected, ok := endMap[end]; ok {
 			return verifyHash(data, m.Algo, expected)
+		}
+	}
+	return nil
+}
+
+// VerifyRange verifies every manifest chunk that is fully contained in
+// [start, end] by hashing the corresponding slice of data. data must be
+// the complete bytes for that range (data[0] == file byte at start).
+// Partial overlaps are skipped (verified later by VerifyFull).
+func (m *Manifest) VerifyRange(start, end int64, data []byte) error {
+	if m == nil {
+		return nil
+	}
+	want := end - start + 1
+	if int64(len(data)) < want {
+		return fmt.Errorf("manifest: VerifyRange short buffer: have %d want %d", len(data), want)
+	}
+	for _, c := range m.Chunks {
+		if c.Start < start || c.End > end {
+			continue
+		}
+		off := c.Start - start
+		size := c.End - c.Start + 1
+		if err := verifyHash(data[off:off+size], m.Algo, c.Hash); err != nil {
+			return fmt.Errorf("manifest: chunk %d-%d: %w", c.Start, c.End, err)
 		}
 	}
 	return nil

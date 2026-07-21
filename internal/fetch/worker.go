@@ -142,6 +142,12 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 		default:
 			// Task fully written — record for resume before the worker
 			// pops the next task and resets its live state.
+			if d.manifest != nil {
+				if err := d.verifyTaskRange(task, f); err != nil {
+					ws.setErr(err)
+					return
+				}
+			}
 			d.recordCompleted(task)
 			if saveC != nil {
 				select {
@@ -378,6 +384,31 @@ func (d *Downloader) readBodyDirect(body io.ReadCloser, task Task, wb mmapWriter
 			return rerr
 		}
 	}
+}
+
+// verifyTaskRange re-reads the written range (mmap path is zero-copy)
+// and checks any fully-contained manifest chunks. Called once per
+// completed task so mid-buffer VerifyChunk misses no longer leave
+// integrity gaps until VerifyFull.
+func (d *Downloader) verifyTaskRange(task Task, f fileWriter) error {
+	if d.manifest == nil {
+		return nil
+	}
+	size := task.Len()
+	if size <= 0 {
+		return nil
+	}
+	if wb, ok := f.(mmapWriterBytes); ok {
+		if data := wb.Bytes(); data != nil {
+			if task.End+1 > int64(len(data)) {
+				return fmt.Errorf("manifest: task %d-%d past mmap len %d", task.Start, task.End, len(data))
+			}
+			return d.manifest.VerifyRange(task.Start, task.End, data[task.Start:task.End+1])
+		}
+	}
+	// Fallback: hash from disk via VerifyFull is deferred to finalize;
+	// non-mmap path still has end-of-download VerifyFull.
+	return nil
 }
 
 // bufSizeSmall and bufSizeLarge bound the pooled buffer size so the pool

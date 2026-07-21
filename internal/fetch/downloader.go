@@ -131,7 +131,8 @@ func (d *Downloader) Download(ctx context.Context) error {
 			if err != nil {
 				d.vlog("corrupt resume file, restarting from scratch: %v", err)
 				clearResume(d.resumePath)
-				d.seedCompleted(nil)
+				// Preserve in-memory progress from same-size mirror failover.
+				completed = d.snapshotCompleted()
 			} else if st != nil {
 				completed = st.Completed
 				sortByStart(completed)
@@ -148,7 +149,12 @@ func (d *Downloader) Download(ctx context.Context) error {
 				}
 				d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
 			} else {
-				d.seedCompleted(nil)
+				// URL mismatch (typical on mirror failover): keep any
+				// in-memory completed ranges from a same-size prior attempt.
+				completed = d.snapshotCompleted()
+				if len(completed) > 0 {
+					d.vlog("reusing %d in-memory completed ranges for mirror", len(completed))
+				}
 			}
 		}
 
@@ -171,11 +177,23 @@ func (d *Downloader) Download(ctx context.Context) error {
 		_ = f.Close()
 
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, downloaded.err)
-		// Mirror failed: the file may contain partial/corrupt data from
-		// this failed attempt. Truncate to 0 so the next mirror attempt
-		// starts fresh. Resume sidecars are URL-keyed so progress from
-		// this mirror cannot be reused on a different URL anyway.
-		if d.resumeEnabled {
+		// Mirror failed. When the next mirror has the same Content-Length
+		// we keep the on-disk bytes and completed ranges so a flaky primary
+		// does not force a full re-download of identical content. Different
+		// sizes (or no resume) wipe the file.
+		nextSameSize := false
+		if i+1 < len(urls) && info.total > 0 {
+			if next, err := d.probeURL(ctx, urls[i+1]); err == nil && next.total == info.total {
+				nextSameSize = true
+			}
+		}
+		if d.resumeEnabled && nextSameSize {
+			// Keep file + completed accumulator; only clear the URL-keyed
+			// resume sidecar so loadResume for the next URL starts clean
+			// while in-memory completed ranges still skip finished chunks.
+			clearResume(d.resumePath)
+			d.vlog("keeping %d completed ranges for same-size mirror failover", len(d.snapshotCompleted()))
+		} else if d.resumeEnabled {
 			_ = os.Truncate(d.outFile, 0)
 			d.seedCompleted(nil)
 			clearResume(d.resumePath)
