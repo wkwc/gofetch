@@ -59,7 +59,7 @@ func (ws *workerState) reset(task Task) {
 }
 
 func isTransient(err error) bool {
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, errBodyIdle) {
 		return true
 	}
 	var netErr net.Error
@@ -305,12 +305,15 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *workerState, body io.ReadCloser) error {
-	defer drainAndClose(body)
+	// Idle-timeout wrapper so a stalled body after headers is retryable
+	// instead of hanging forever (steal only fires after bytesDone ≥ 1).
+	idle := newIdleBody(ctx, body, defaultBodyIdle)
+	defer drainAndClose(idle)
 
 	// Zero-copy fast path when the writer exposes the underlying mmap slice.
 	if wb, ok := f.(mmapWriterBytes); ok {
 		if data := wb.Bytes(); data != nil {
-			return d.readBodyDirect(body, task, wb, ws, data)
+			return d.readBodyDirect(idle, task, wb, ws, data)
 		}
 	}
 
@@ -319,7 +322,7 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 	cursor, end := task.Start, task.End
 	manifest := d.manifest
 	for {
-		n, rerr := body.Read(buf)
+		n, rerr := idle.Read(buf)
 		if n > 0 {
 			if remaining := end - cursor + 1; int64(n) > remaining {
 				n = int(remaining)
@@ -354,7 +357,8 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 	}
 }
 
-func (d *Downloader) readBodyDirect(body io.ReadCloser, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
+func (d *Downloader) readBodyDirect(body io.Reader, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
+	_ = wb
 	taskEnd := task.End
 	if taskEnd+1 > int64(len(data)) {
 		return fmt.Errorf("mmap slice short: end=%d len=%d", taskEnd, len(data))
