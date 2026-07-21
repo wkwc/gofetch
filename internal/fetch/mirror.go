@@ -99,6 +99,9 @@ func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probe
 		}
 		return probeInfo{supportsRanges: true, total: total}, nil
 	case http.StatusOK:
+		// ContentLength may be -1 when the server omits it (chunked /
+		// unknown size). Keep supportsRanges=false and total as-is so
+		// single-stream path handles unknown size explicitly.
 		return probeInfo{supportsRanges: false, total: resp.ContentLength}, nil
 	default:
 		return probeInfo{}, httpError("range GET", rawURL, resp.StatusCode)

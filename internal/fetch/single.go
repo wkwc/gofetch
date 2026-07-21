@@ -36,14 +36,18 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		return fmt.Errorf("GET %s: unexpected Content-Encoding %q", d.url, enc)
 	}
 
+	// Idle-timeout the body so a stalled single-stream GET cannot hang
+	// forever after headers (range workers already use idleBody).
+	idle := newIdleBody(ctx, resp.Body, defaultBodyIdle)
+
 	// Zero-copy fast path when the file is mmap'd.
 	if wb, ok := f.(mmapWriterBytes); ok {
 		if data := wb.Bytes(); data != nil {
-			return d.singleMmap(resp.Body, ws, data, total)
+			return d.singleMmap(idle, ws, data, total)
 		}
 	}
 
-	defer drainAndClose(resp.Body)
+	defer drainAndClose(idle)
 
 	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
@@ -57,7 +61,7 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 	}
 	var cursor int64
 	for {
-		n, rerr := resp.Body.Read(buf)
+		n, rerr := idle.Read(buf)
 		if n > 0 {
 			if _, werr := f.WriteAt(buf[:n], cursor); werr != nil {
 				return werr
@@ -95,9 +99,7 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 }
 
 // singleMmap streams the body straight into the mmap'd output slice.
-// Bytes from any previously-completed resume (preDone) are skipped by
-// seeking the body past them rather than trusting `bytesDone` (which
-// is reset() below) or `prog.snapshot` (which reflects seeded bytes).
+// `body` is typically an idleBody wrapping the HTTP response body.
 func (d *Downloader) singleMmap(body io.ReadCloser, ws *workerState, data []byte, total int64) error {
 	defer drainAndClose(body)
 	ws.reset(Task{Start: 0, End: total - 1})

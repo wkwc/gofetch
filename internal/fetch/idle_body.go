@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -18,13 +19,19 @@ var errBodyIdle = errors.New("body idle timeout: no data received")
 // successful Read resets the timer. If no data arrives within idle,
 // Read returns a transient error so the worker can requeue.
 //
+// On idle/context cancel we Close the underlying reader once so the
+// helper Read goroutine unblocks (HTTP body reads return on close)
+// instead of leaking until the peer eventually times out.
+//
 // Reads go into a private buffer so a timed-out goroutine cannot
 // race with the caller's reuse of p.
 type idleBody struct {
-	r     io.Reader
-	ctx   context.Context
-	idle  time.Duration
-	timer *time.Timer
+	r         io.Reader
+	ctx       context.Context
+	idle      time.Duration
+	timer     *time.Timer
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func newIdleBody(ctx context.Context, r io.Reader, idle time.Duration) *idleBody {
@@ -40,6 +47,14 @@ func newIdleBody(ctx context.Context, r io.Reader, idle time.Duration) *idleBody
 	}
 	t.Reset(idle)
 	return &idleBody{r: r, ctx: ctx, idle: idle, timer: t}
+}
+
+func (b *idleBody) forceClose() {
+	b.closeOnce.Do(func() {
+		if c, ok := b.r.(io.Closer); ok {
+			b.closeErr = c.Close()
+		}
+	})
 }
 
 func (b *idleBody) Read(p []byte) (int, error) {
@@ -58,8 +73,11 @@ func (b *idleBody) Read(p []byte) (int, error) {
 	}()
 	select {
 	case <-b.ctx.Done():
+		b.forceClose()
 		return 0, b.ctx.Err()
 	case <-b.timer.C:
+		// Unblock the in-flight Read by closing the body.
+		b.forceClose()
 		return 0, errBodyIdle
 	case res := <-ch:
 		if res.n > 0 {
@@ -80,8 +98,6 @@ func (b *idleBody) Close() error {
 	if b.timer != nil {
 		b.timer.Stop()
 	}
-	if c, ok := b.r.(io.Closer); ok {
-		return c.Close()
-	}
-	return nil
+	b.forceClose()
+	return b.closeErr
 }

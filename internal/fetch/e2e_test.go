@@ -296,6 +296,56 @@ func TestProbeServerError(t *testing.T) {
 	}
 }
 
+// TestProbeHeadNoContentLength falls through to the range-GET probe when
+// HEAD 200 omits Content-Length (historical bug: ok=true short-circuited).
+func TestProbeHeadNoContentLength(t *testing.T) {
+	payload := makePayload(64 * 1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if r.Method == http.MethodHead {
+			// Intentionally omit Content-Length.
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		rangeHeader := r.Header.Get("Range")
+		if rangeHeader == "" {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+			return
+		}
+		var start, end int64
+		if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil {
+			http.Error(w, "bad range", http.StatusBadRequest)
+			return
+		}
+		if end >= int64(len(payload)) {
+			end = int64(len(payload)) - 1
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(payload[start : end+1])
+	}))
+	t.Cleanup(srv.Close)
+
+	d := NewDownloader(srv.URL, "test.bin", Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	info, err := d.probeURL(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("probeURL: %v", err)
+	}
+	if !info.supportsRanges {
+		t.Error("expected ranges via range-GET fallthrough after HEAD without CL")
+	}
+	if info.total != int64(len(payload)) {
+		t.Errorf("total = %d, want %d", info.total, len(payload))
+	}
+}
+
 // TestQuietModeStillVerifiesHash ensures -q never skips integrity checks.
 func TestQuietModeStillVerifiesHash(t *testing.T) {
 	payload := makePayload(256 * 1024)
