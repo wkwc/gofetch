@@ -26,6 +26,11 @@ func (r *rawFileWriter) WriteAt(buf []byte, off int64) (int, error) {
 	return r.F.WriteAt(buf, off)
 }
 
+// ReadAt enables post-task manifest verification without mmap.
+func (r *rawFileWriter) ReadAt(buf []byte, off int64) (int, error) {
+	return r.F.ReadAt(buf, off)
+}
+
 // Sync delegates to F.Sync (fsync/fdatasync on fd).
 func (r *rawFileWriter) Sync() error { return r.F.Sync() }
 
@@ -192,7 +197,13 @@ func allocateFileWriter(path string, size int64, resume bool) (fileWriter, error
 			data: nil, // lazy-mmap below
 			size: size,
 		}
-		return m.withMmap()
+		mw, err := m.withMmap()
+		if err != nil {
+			// Do not leak the RDWR fd; fall back to pwrite preserving bytes.
+			_ = fd.Close()
+			return allocateRawFile(path, size, true)
+		}
+		return mw, nil
 	}
 	mw, err := newMmapWriter(path, size)
 	if err != nil {
@@ -217,8 +228,9 @@ func (m *mmapWriter) withMmap() (*mmapWriter, error) {
 
 // allocateRawFile is the fallback writer for size=0 (regular file).
 // Honors `resume` by skipping the O_TRUNC flag if true.
+// Opens RDWR so post-task manifest VerifyRange can re-read spans.
 func allocateRawFile(path string, size int64, resume bool) (fileWriter, error) {
-	flags := os.O_WRONLY | os.O_CREATE
+	flags := os.O_RDWR | os.O_CREATE
 	if !resume {
 		flags |= os.O_TRUNC
 	}

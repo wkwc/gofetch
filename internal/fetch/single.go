@@ -48,10 +48,14 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
 	manifest := d.manifest
-	// Seed cursor from any resumed bytes (typically zero here since a
-	// non-ranged server can't resume, but prog already accounts for them).
-	doneBytes, _ := prog.snapshot()
-	var cursor int64 = doneBytes
+	// Non-range GET always delivers the full object from byte 0. Never
+	// offset the write cursor by resumed bytes — that splices body[0]
+	// onto file[done] and corrupts the output. If we already have
+	// progress, ignore it and rewrite from the start.
+	if len(completed) > 0 {
+		d.vlog("single-stream: ignoring %d completed ranges (server has no ranges)", len(completed))
+	}
+	var cursor int64
 	for {
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {

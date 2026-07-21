@@ -119,6 +119,15 @@ func (d *Downloader) Download(ctx context.Context) error {
 			continue
 		}
 
+		// If we carried completed ranges from a failed mirror, wipe them
+		// when the new probe proves a different size (cannot reuse bytes).
+		if d.resumeEnabled && info.total > 0 && d.totalSize > 0 && info.total != d.totalSize {
+			d.vlog("size changed %d → %d; discarding progress", d.totalSize, info.total)
+			_ = os.Truncate(d.outFile, 0)
+			d.seedCompleted(nil)
+			clearResume(d.resumePath)
+		}
+
 		d.totalSize = info.total
 		d.autoConfig.Retune(info.total)
 		d.workersN = d.autoConfig.Workers
@@ -177,29 +186,20 @@ func (d *Downloader) Download(ctx context.Context) error {
 		_ = f.Close()
 
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, downloaded.err)
-		// Mirror failed. When the next mirror has the same Content-Length
-		// we keep the on-disk bytes and completed ranges so a flaky primary
-		// does not force a full re-download of identical content. Different
-		// sizes (or no resume) wipe the file.
-		nextSameSize := false
-		if i+1 < len(urls) && info.total > 0 {
-			if next, err := d.probeURL(ctx, urls[i+1]); err == nil && next.total == info.total {
-				nextSameSize = true
-			}
-		}
-		if d.resumeEnabled && nextSameSize {
-			// Keep file + completed accumulator; only clear the URL-keyed
-			// resume sidecar so loadResume for the next URL starts clean
-			// while in-memory completed ranges still skip finished chunks.
-			clearResume(d.resumePath)
-			d.vlog("keeping %d completed ranges for same-size mirror failover", len(d.snapshotCompleted()))
-		} else if d.resumeEnabled {
-			_ = os.Truncate(d.outFile, 0)
-			d.seedCompleted(nil)
-			clearResume(d.resumePath)
-		} else {
+		// Keep on-disk bytes + completed ranges until the *next* iteration
+		// successfully probes and proves a size mismatch. Pre-probing the
+		// next URL here doubles RTT and can spuriously wipe on transient
+		// probe failure. Wipe only when we know we will not keep progress.
+		if !d.resumeEnabled {
 			os.Remove(d.outFile)
+			continue
 		}
+		// Clear URL-keyed resume sidecar; in-memory completed survives
+		// for same-size failover. Size mismatch is handled after the
+		// next successful probe (below, at loop top via seed logic).
+		clearResume(d.resumePath)
+		d.vlog("mirror failed; keeping %d completed ranges pending next probe",
+			len(d.snapshotCompleted()))
 	}
 	return lastErr
 }

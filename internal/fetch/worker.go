@@ -251,8 +251,9 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 			return fmt.Errorf("range %d-%d: server returned 200 OK (does not support range requests)", task.Start, task.End)
 		case http.StatusRequestedRangeNotSatisfiable:
 			drainAndClose(resp.Body)
-			d.vlog("HTTP 416 on %d-%d: range unsatisfiable, skipping", task.Start, task.End)
-			return nil
+			// Never treat 416 as success: that would recordCompleted an
+			// unwritten range and leave permanent holes on resume.
+			return fmt.Errorf("range %d-%d: HTTP 416 range not satisfiable", task.Start, task.End)
 		case http.StatusPartialContent:
 			// fall through to read body
 		default:
@@ -265,6 +266,15 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 		if enc := resp.Header.Get("Content-Encoding"); !isIdentity(enc) {
 			drainAndClose(resp.Body)
 			return fmt.Errorf("range %d-%d: unexpected Content-Encoding %q", task.Start, task.End, enc)
+		}
+		// Require Content-Range to match the requested task so a CDN
+		// cannot hand us a different slice written at task.Start.
+		if cr := resp.Header.Get("Content-Range"); cr != "" {
+			start, end, _, ok := parseContentRange(cr)
+			if !ok || start != task.Start || end != task.End {
+				drainAndClose(resp.Body)
+				return fmt.Errorf("range %d-%d: Content-Range mismatch %q", task.Start, task.End, cr)
+			}
 		}
 		return d.readBody(rctx, task, f, ws, resp.Body)
 	}
@@ -386,10 +396,9 @@ func (d *Downloader) readBodyDirect(body io.ReadCloser, task Task, wb mmapWriter
 	}
 }
 
-// verifyTaskRange re-reads the written range (mmap path is zero-copy)
-// and checks any fully-contained manifest chunks. Called once per
-// completed task so mid-buffer VerifyChunk misses no longer leave
-// integrity gaps until VerifyFull.
+// verifyTaskRange checks any fully-contained manifest chunks for the
+// completed task. Mmap path is zero-copy; raw path reads via WriteAt-
+// compatible SectionReader-style ReadAt when available.
 func (d *Downloader) verifyTaskRange(task Task, f fileWriter) error {
 	if d.manifest == nil {
 		return nil
@@ -406,9 +415,20 @@ func (d *Downloader) verifyTaskRange(task Task, f fileWriter) error {
 			return d.manifest.VerifyRange(task.Start, task.End, data[task.Start:task.End+1])
 		}
 	}
-	// Fallback: hash from disk via VerifyFull is deferred to finalize;
-	// non-mmap path still has end-of-download VerifyFull.
-	return nil
+	// Non-mmap: re-read the span for VerifyRange when the writer is a
+	// raw file (os.File.ReadAt).
+	type readerAt interface {
+		ReadAt([]byte, int64) (int, error)
+	}
+	ra, ok := f.(readerAt)
+	if !ok {
+		return nil // defer to VerifyFull
+	}
+	buf := make([]byte, size)
+	if _, err := ra.ReadAt(buf, task.Start); err != nil {
+		return fmt.Errorf("manifest: re-read task %d-%d: %w", task.Start, task.End, err)
+	}
+	return d.manifest.VerifyRange(task.Start, task.End, buf)
 }
 
 // bufSizeSmall and bufSizeLarge bound the pooled buffer size so the pool
@@ -429,19 +449,22 @@ var bufPool = sync.Pool{
 func acquireBuf(n int) []byte {
 	if n <= bufSizeLarge {
 		bp := bufPool.Get().(*[]byte)
+		if cap(*bp) < n {
+			// Undersized pool entry (should not happen) — allocate fresh.
+			return make([]byte, n)
+		}
 		return (*bp)[:n]
 	}
 	return make([]byte, n)
 }
 
-// releaseBuf returns a buffer to the pool when it is sized appropriately.
-// The b[:cap(b):cap(b)] slice expression keeps the backing array's capacity
-// matching the buffer's length so the next acquire can request any sub-slice.
+// releaseBuf returns a buffer to the pool only when capacity is exactly
+// bufSizeLarge so the next acquireBuf(bufSizeLarge) never panics on a
+// short slice.
 func releaseBuf(b []byte) {
-	c := cap(b)
-	if c == 0 || c > bufSizeLarge {
+	if cap(b) != bufSizeLarge {
 		return
 	}
-	bp := b[:c:c]
+	bp := b[:bufSizeLarge:bufSizeLarge]
 	bufPool.Put(&bp)
 }

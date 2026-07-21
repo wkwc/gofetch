@@ -36,9 +36,10 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	seedResumeBytes(prog, completed)
 
 	if total <= 0 {
-		// Empty/unknown-size range path: Download will finalize.
+		// Ranges with unknown size cannot seed tasks safely — fall back
+		// to single-stream rather than "succeeding" with an empty file.
 		_ = prog
-		return nil
+		return d.singleDownload(ctx, total, completed, f)
 	}
 
 	// Try to load manifest
@@ -109,6 +110,14 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 						ws.setErr(err)
 					}
 					break
+				}
+				if d.manifest != nil {
+					if err := d.verifyTaskRange(task, f); err != nil {
+						for _, ws := range states {
+							ws.setErr(err)
+						}
+						break
+					}
 				}
 				d.recordCompleted(task)
 			}
