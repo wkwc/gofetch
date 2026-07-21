@@ -154,32 +154,3 @@ func (d *Downloader) snapshotCompleted() []Task {
 	copy(out, d.completed)
 	return out
 }
-
-// allocateSparse opens path write-only and truncates it to size,
-// yielding a sparse file when supported by the filesystem.
-// If resume is enabled and the file already has the target size,
-// it is opened without truncation to preserve existing bytes.
-func allocateSparse(path string, size int64, resume bool) (*os.File, error) {
-	flags := os.O_WRONLY | os.O_CREATE
-	if !resume {
-		flags |= os.O_TRUNC
-	}
-	f, err := os.OpenFile(path, flags, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	if size > 0 {
-		info, err := f.Stat()
-		if err != nil {
-			f.Close()
-			return nil, err
-		}
-		if info.Size() != size {
-			if err := f.Truncate(size); err != nil {
-				f.Close()
-				return nil, fmt.Errorf("truncate %d: %w", size, err)
-			}
-		}
-	}
-	return f, nil
-}

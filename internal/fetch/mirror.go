@@ -53,9 +53,10 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 		ar := resp.Header.Get("Accept-Ranges")
 		total := resp.ContentLength
 		if total < 0 {
-			// Server didn't send Content-Length. Treat as unknown size;
-			// the range-GET fallback will determine the actual size.
-			total = 0
+			// No Content-Length: fall through to range-GET so we can
+			// learn size from Content-Range (comment previously claimed
+			// this happened, but ok=true short-circuited probeURL).
+			return probeInfo{}, false, nil
 		}
 		return probeInfo{
 			supportsRanges: ar != "" && ar != "none",

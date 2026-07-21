@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-func TestAllocateSparse(t *testing.T) {
+func TestAllocateFileWriter(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.bin")
 
-	f, err := allocateSparse(path, 1024*1024, false)
+	fw, err := allocateFileWriter(path, 1024*1024, false)
 	if err != nil {
-		t.Fatalf("allocateSparse: %v", err)
+		t.Fatalf("allocateFileWriter: %v", err)
 	}
-	defer f.Close()
+	defer fw.Close()
 
 	if info, err := os.Stat(path); err != nil {
 		t.Fatalf("Stat: %v", err)
@@ -23,23 +23,23 @@ func TestAllocateSparse(t *testing.T) {
 		t.Errorf("file size = %d, want %d", info.Size(), 1024*1024)
 	}
 
-	if _, err := f.WriteAt([]byte("hello"), 0); err != nil {
+	if _, err := fw.WriteAt([]byte("hello"), 0); err != nil {
 		t.Fatalf("WriteAt 0: %v", err)
 	}
-	if _, err := f.WriteAt([]byte("world"), 512*1024); err != nil {
+	if _, err := fw.WriteAt([]byte("world"), 512*1024); err != nil {
 		t.Fatalf("WriteAt mid: %v", err)
 	}
 }
 
-func TestAllocateSparseZero(t *testing.T) {
+func TestAllocateRawZero(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.bin")
 
-	f, err := allocateSparse(path, 0, false)
+	fw, err := allocateRawFile(path, 0, false)
 	if err != nil {
-		t.Fatalf("allocateSparse(0): %v", err)
+		t.Fatalf("allocateRawFile(0): %v", err)
 	}
-	defer f.Close()
+	defer fw.Close()
 
 	info, err := os.Stat(path)
 	if err != nil {
