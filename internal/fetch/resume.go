@@ -18,16 +18,16 @@ import (
 // InProgress holds the currently running task and its partial progress
 // (bytes done) so an interrupted download resumes from the exact offset.
 type ResumeState struct {
-	URL          string    `json:"url"`
-	OutFile      string    `json:"out_file"`
-	TotalSize    int64     `json:"total_size"`
-	HashAlgo     string    `json:"hash_algo,omitempty"`
-	ExpectedHash string    `json:"expected_hash,omitempty"`
-	Completed    []Task    `json:"completed"`
-	InProgress   *Task     `json:"in_progress,omitempty"`
-	InProgressDone int64   `json:"in_progress_done,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	URL            string    `json:"url"`
+	OutFile        string    `json:"out_file"`
+	TotalSize      int64     `json:"total_size"`
+	HashAlgo       string    `json:"hash_algo,omitempty"`
+	ExpectedHash   string    `json:"expected_hash,omitempty"`
+	Completed      []Task    `json:"completed"`
+	InProgress     *Task     `json:"in_progress,omitempty"`
+	InProgressDone int64     `json:"in_progress_done,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // resumePath returns the canonical sidecar path for an output file.
@@ -39,7 +39,7 @@ func (d *Downloader) saveResume(completed []Task) error {
 	if d.resumePath == "" {
 		return nil
 	}
-	
+
 	// Capture in-progress task from any worker
 	var inProgress *Task
 	var inProgressDone int64
@@ -57,15 +57,15 @@ func (d *Downloader) saveResume(completed []Task) error {
 			}
 		}
 	}
-	
+
 	state := ResumeState{
 		URL: d.url, OutFile: d.outFile, TotalSize: d.totalSize,
 		HashAlgo: d.hashAlgo, ExpectedHash: d.expectedHash,
-		Completed:       dedupTasks(completed),
-		InProgress:      inProgress,
-		InProgressDone:  inProgressDone,
-		CreatedAt:       d.startTime,
-		UpdatedAt:       time.Now(),
+		Completed:      dedupTasks(completed),
+		InProgress:     inProgress,
+		InProgressDone: inProgressDone,
+		CreatedAt:      d.startTime,
+		UpdatedAt:      time.Now(),
 	}
 	data, err := json.Marshal(state)
 	if err != nil {

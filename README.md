@@ -195,10 +195,6 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 - `staticcheck` clean.
 - 30 tests pass under `-race -count=5`.
 
-## Limitations
-
-None — all previously documented limitations have been addressed.
-
 ## License
 
 MPL-2.0

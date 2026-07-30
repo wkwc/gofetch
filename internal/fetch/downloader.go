@@ -144,7 +144,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 				completed = st.Completed
 				sortByStart(completed)
 				d.seedCompleted(completed)
-				
+
 				// Restore in-progress task if present
 				if st.InProgress != nil && st.InProgressDone > 0 {
 					// Adjust the task to resume from where we left off
@@ -154,11 +154,11 @@ func (d *Downloader) Download(ctx context.Context) error {
 					}
 					if remaining.Start <= remaining.End {
 						completed = append(completed, remaining)
-						d.vlog("resuming in-progress range %d-%d (was at offset %d)", 
+						d.vlog("resuming in-progress range %d-%d (was at offset %d)",
 							remaining.Start, remaining.End, st.InProgressDone)
 					}
 				}
-				
+
 				// Inherit the hash algo+value that was active when
 				// the sidecar was written, so a sha512 download
 				// surviving a process restart verifies with the
