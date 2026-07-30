@@ -9,3 +9,5 @@
 *.gofetch.resume
 *.gofetch.manifest
 *.gofetch.resume.tmp
+tmp/
+benchserver
