@@ -197,7 +197,7 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 
 ## Limitations
 
-- Resume state only stores completed *ranges*; partially written ranges are retried from scratch on resume (the file already has those bytes, so it's idempotent).
+None — all previously documented limitations have been addressed.
 
 ## License
 
