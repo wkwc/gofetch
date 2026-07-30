@@ -36,6 +36,6 @@ func BenchmarkMmapSingle(b *testing.B) {
 		if err := syscall.Munmap(data); err != nil {
 			b.Fatal(err)
 		}
-		fd.Close()
+		_ = fd.Close()
 	}
 }

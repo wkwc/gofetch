@@ -186,7 +186,7 @@ func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex stri
 	if err != nil {
 		return "", "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		return "", "", fmt.Errorf("sidecar HTTP %d", resp.StatusCode)
 	}
@@ -303,7 +303,7 @@ func parseSidecarContent(content, sourcePath string) (algo, hashHex string, err 
 func isValidHex(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}

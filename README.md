@@ -201,4 +201,4 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 
 ## License
 
-Apache-2.0
+MPL-2.0

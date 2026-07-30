@@ -19,7 +19,7 @@ const drainLimit = 32 << 10 // 32 KiB
 // the body so the underlying connection can be reused by http.Transport.
 func drainAndClose(body io.ReadCloser) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(body, drainLimit))
-	body.Close()
+	_ = body.Close()
 }
 
 // probeInfo is what we learn about a server before downloading.
@@ -48,8 +48,8 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 		return probeInfo{}, false, err
 	}
 	drainAndClose(resp.Body)
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		ar := resp.Header.Get("Accept-Ranges")
 		total := resp.ContentLength
 		if total < 0 {
@@ -62,9 +62,7 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 			supportsRanges: ar != "" && ar != "none",
 			total:          total,
 		}, true, nil
-	case resp.StatusCode == http.StatusMethodNotAllowed,
-		resp.StatusCode == http.StatusBadRequest,
-		resp.StatusCode == http.StatusNotImplemented:
+	case http.StatusMethodNotAllowed, http.StatusBadRequest, http.StatusNotImplemented:
 		return probeInfo{}, false, nil
 	default:
 		return probeInfo{}, false, httpError("HEAD", rawURL, resp.StatusCode)

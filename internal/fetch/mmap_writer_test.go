@@ -14,7 +14,7 @@ func TestNewMmapWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newMmapWriter: %v", err)
 	}
-	defer mw.Close()
+	defer func() { _ = mw.Close() }()
 
 	if mw.size != 4096 {
 		t.Errorf("size = %d, want 4096", mw.size)
@@ -44,7 +44,7 @@ func TestMmapWriterWriteAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newMmapWriter: %v", err)
 	}
-	defer mw.Close()
+	defer func() { _ = mw.Close() }()
 
 	data := []byte("hello, mmap!")
 	n, err := mw.WriteAt(data, 100)
@@ -71,7 +71,7 @@ func TestMmapWriterWriteAtOOB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newMmapWriter: %v", err)
 	}
-	defer mw.Close()
+	defer func() { _ = mw.Close() }()
 
 	_, err = mw.WriteAt(make([]byte, 10), 60) // 60+10 > 64
 	if err == nil {
@@ -87,7 +87,7 @@ func TestMmapWriterBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newMmapWriter: %v", err)
 	}
-	defer mw.Close()
+	defer func() { _ = mw.Close() }()
 
 	if mw.Bytes() == nil {
 		t.Error("expected non-nil Bytes()")

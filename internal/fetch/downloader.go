@@ -185,7 +185,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 		// next URL here doubles RTT and can spuriously wipe on transient
 		// probe failure. Wipe only when we know we will not keep progress.
 		if !d.resumeEnabled {
-			os.Remove(d.outFile)
+			_ = os.Remove(d.outFile)
 			continue
 		}
 		// Clear URL-keyed resume sidecar; in-memory completed survives

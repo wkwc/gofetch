@@ -108,7 +108,7 @@ func (m *Manifest) VerifyFull(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	const bufSize = 256 * 1024
 	buf := make([]byte, bufSize)
 	for _, c := range m.Chunks {

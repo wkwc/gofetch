@@ -15,7 +15,7 @@ func TestAllocateFileWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("allocateFileWriter: %v", err)
 	}
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	if info, err := os.Stat(path); err != nil {
 		t.Fatalf("Stat: %v", err)
@@ -39,7 +39,7 @@ func TestAllocateRawZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("allocateRawFile(0): %v", err)
 	}
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	info, err := os.Stat(path)
 	if err != nil {

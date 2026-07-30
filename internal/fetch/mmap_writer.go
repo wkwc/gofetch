@@ -77,12 +77,12 @@ func newMmapWriter(path string, size int64) (*mmapWriter, error) {
 		return nil, err
 	}
 	if err := fd.Truncate(size); err != nil {
-		fd.Close()
+		_ = fd.Close()
 		return nil, fmt.Errorf("truncate: %w", err)
 	}
 	data, err := mmapSys(fd.Fd(), int(size))
 	if err != nil {
-		fd.Close()
+		_ = fd.Close()
 		return nil, fmt.Errorf("mmap: %w", err)
 	}
 	// Hint the kernel we'll access the bytes sequentially. This avoids
