@@ -68,8 +68,8 @@ func (d *Downloader) saveResume(completed []Task) error {
 	parent := filepath.Dir(d.resumePath)
 	if parent != "" {
 		if df, err := os.Open(parent); err == nil {
-			df.Sync()
-			df.Close()
+			_ = df.Sync()
+			_ = df.Close()
 		}
 	}
 	return os.Rename(tmp, d.resumePath)

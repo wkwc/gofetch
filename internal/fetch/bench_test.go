@@ -25,14 +25,14 @@ func BenchmarkParallelDownload(b *testing.B) {
 		if h == "" {
 			w.Header().Set("Content-Length", i64toa(int64(size)))
 			w.WriteHeader(http.StatusOK)
-			w.Write(payload)
+			_, _ = w.Write(payload)
 			return
 		}
 		start, end := parseRangeFast(h)
 		w.Header().Set("Content-Range", rangeHdr(start, end, size))
 		w.Header().Set("Content-Length", i64toa(int64(end-start+1)))
 		w.WriteHeader(http.StatusPartialContent)
-		w.Write(payload[start : end+1])
+		_, _ = w.Write(payload[start : end+1])
 	}))
 	defer srv.Close()
 

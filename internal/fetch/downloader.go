@@ -119,7 +119,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 			d.vlog("size changed %d → %d; discarding progress", d.totalSize, info.total)
 			_ = os.Truncate(d.outFile, 0)
 			d.seedCompleted(nil)
-			clearResume(d.resumePath)
+			_ = clearResume(d.resumePath)
 		}
 
 		d.totalSize = info.total
@@ -133,7 +133,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 			st, err := loadResume(d.resumePath, activeURL, info.total)
 			if err != nil {
 				d.vlog("corrupt resume file, restarting from scratch: %v", err)
-				clearResume(d.resumePath)
+				_ = clearResume(d.resumePath)
 				// Preserve in-memory progress from same-size mirror failover.
 				completed = d.snapshotCompleted()
 			} else if st != nil {
@@ -191,7 +191,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 		// Clear URL-keyed resume sidecar; in-memory completed survives
 		// for same-size failover. Size mismatch is handled after the
 		// next successful probe (below, at loop top via seed logic).
-		clearResume(d.resumePath)
+		_ = clearResume(d.resumePath)
 		d.vlog("mirror failed; keeping %d completed ranges pending next probe",
 			len(d.snapshotCompleted()))
 	}

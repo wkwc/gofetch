@@ -18,7 +18,7 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 	// leaving stale state on disk lets the next run silently skip
 	// ranges, so we err on the side of forcing a full re-download.
 	if d.resumePath != "" {
-		defer func() { clearResume(d.resumePath) }()
+		defer func() { _ = clearResume(d.resumePath) }()
 	}
 	if prog == nil {
 		states := make([]*workerState, max(d.workersN, 1))

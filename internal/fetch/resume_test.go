@@ -86,17 +86,21 @@ func TestResumeClearAndCorrupt(t *testing.T) {
 	}
 	_ = d.saveResume([]Task{{0, 9}})
 
-	clearResume(path)
+	if err := clearResume(path); err != nil {
+		t.Fatalf("clearResume: %v", err)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("file should be deleted after clearResume")
 	}
 
 	// Clear on empty path is no-op
-	clearResume("")
+	if err := clearResume(""); err != nil {
+		t.Fatalf("clearResume(''): %v", err)
+	}
 
 	// Corrupted JSON
 	corrupt := filepath.Join(dir, "c.gofetch.resume")
-	os.WriteFile(corrupt, []byte("not json{{{"), 0o644)
+	_ = os.WriteFile(corrupt, []byte("not json{{{"), 0o644)
 	if _, err := loadResume(corrupt, "https://example.com/file", 100); err == nil {
 		t.Error("corrupt JSON: expected error, got nil")
 	}
