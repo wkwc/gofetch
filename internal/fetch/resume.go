@@ -15,6 +15,8 @@ import (
 // HashAlgo/ExpectedHash carry algorithm metadata so resuming a sha512
 // download doesn't get demoted to sha256 by a reader that only sees
 // d.expectedHash on the receiver side.
+// InProgress holds the currently running task and its partial progress
+// (bytes done) so an interrupted download resumes from the exact offset.
 type ResumeState struct {
 	URL          string    `json:"url"`
 	OutFile      string    `json:"out_file"`
@@ -22,6 +24,8 @@ type ResumeState struct {
 	HashAlgo     string    `json:"hash_algo,omitempty"`
 	ExpectedHash string    `json:"expected_hash,omitempty"`
 	Completed    []Task    `json:"completed"`
+	InProgress   *Task     `json:"in_progress,omitempty"`
+	InProgressDone int64   `json:"in_progress_done,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -35,11 +39,33 @@ func (d *Downloader) saveResume(completed []Task) error {
 	if d.resumePath == "" {
 		return nil
 	}
+	
+	// Capture in-progress task from any worker
+	var inProgress *Task
+	var inProgressDone int64
+	for _, ws := range d.workerStates {
+		if ws == nil {
+			continue
+		}
+		curTask := ws.curTask.Load()
+		if curTask != nil {
+			done := ws.bytesDone.Load()
+			if done > 0 {
+				inProgress = curTask
+				inProgressDone = done
+				break
+			}
+		}
+	}
+	
 	state := ResumeState{
 		URL: d.url, OutFile: d.outFile, TotalSize: d.totalSize,
 		HashAlgo: d.hashAlgo, ExpectedHash: d.expectedHash,
-		Completed: dedupTasks(completed),
-		CreatedAt: d.startTime, UpdatedAt: time.Now(),
+		Completed:       dedupTasks(completed),
+		InProgress:      inProgress,
+		InProgressDone:  inProgressDone,
+		CreatedAt:       d.startTime,
+		UpdatedAt:       time.Now(),
 	}
 	data, err := json.Marshal(state)
 	if err != nil {

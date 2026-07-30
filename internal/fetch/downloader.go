@@ -42,6 +42,10 @@ type Downloader struct {
 	// worker.reset() cannot drop progress before the next save.
 	completedMu sync.Mutex
 	completed   []Task
+
+	// workerStates holds live state for each worker so we can
+	// persist in-progress progress to the resume sidecar.
+	workerStates []*workerState
 }
 
 // Options configures NewDownloader. Zero values enable auto-optimization.
@@ -140,6 +144,21 @@ func (d *Downloader) Download(ctx context.Context) error {
 				completed = st.Completed
 				sortByStart(completed)
 				d.seedCompleted(completed)
+				
+				// Restore in-progress task if present
+				if st.InProgress != nil && st.InProgressDone > 0 {
+					// Adjust the task to resume from where we left off
+					remaining := Task{
+						Start: st.InProgress.Start + st.InProgressDone,
+						End:   st.InProgress.End,
+					}
+					if remaining.Start <= remaining.End {
+						completed = append(completed, remaining)
+						d.vlog("resuming in-progress range %d-%d (was at offset %d)", 
+							remaining.Start, remaining.End, st.InProgressDone)
+					}
+				}
+				
 				// Inherit the hash algo+value that was active when
 				// the sidecar was written, so a sha512 download
 				// surviving a process restart verifies with the

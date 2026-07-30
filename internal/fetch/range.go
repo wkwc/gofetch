@@ -32,6 +32,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for i := range states {
 		states[i] = newWorkerState()
 	}
+	// Store worker states in Downloader so we can persist in-progress progress
+	d.workerStates = states
+
 	prog := newProgress(total, states)
 	seedResumeBytes(prog, completed)
 
