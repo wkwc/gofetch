@@ -16,7 +16,7 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 ## Features
 
 | Feature | Flag | Description |
-|---------|------|-------------|
+|---|---|---|
 | **Output** | `-o PATH` | Output file path (default: basename of URL) |
 | **Quiet** | `-q` | Suppress progress bar; print only filename on success |
 | **Verbose** | `-v` | Verbose logging to stderr (mirror selection, task starts, retries, chunk verification) |
@@ -104,7 +104,7 @@ but "parallel curl."
 The `-h` flag supports multiple formats:
 
 | Format | Example |
-|--------|---------|
+|---|---|
 | `sha256:hex` | `gofetch -h sha256:abc123...` |
 | `sha512:hex` | `gofetch -h sha512:abc123...` |
 | `auto` (fetch sidecar) | `gofetch -h auto https://...` fetches `.sha256` then `.sha512` sidecars |
@@ -151,6 +151,7 @@ gofetch/
     manifest.go                    # Per-chunk integrity manifest (O(1) lookup)
     optimizer.go                   # Auto-config + transport factory
     *_test.go                      # Unit, property, and end-to-end tests
+  scripts/                         # Benchmark scripts
 ```
 
 ## Benchmark
@@ -159,7 +160,7 @@ Run the synthetic-loopback comparison against aria2c:
 
 ```bash
 # Both binaries must be built (gofetch via `go build`, aria2c downloaded)
-RUNS=5 SIZE_MB=64 ./bench_compare.sh
+RUNS=5 SIZE_MB=64 ./scripts/bench_compare.sh
 ```
 
 Measurements on a Linux 16-core test box (loopback, fresh server per

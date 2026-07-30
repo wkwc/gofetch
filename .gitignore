@@ -1,13 +1,30 @@
-# Build artifacts and cache
-/build/
-/.build/
+# Runtime secrets
+.env
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Build artifacts
 /gofetch
 /benchserver
+dist/
+/build/
+/.build/
 *.test
-/tmp/
 *.bin
+go.sum
+
+# Sidecar files for gofetch
 *.gofetch.resume
 *.gofetch.manifest
 *.gofetch.resume.tmp
+
+# Temporary files
+/tmp/
 tmp/
-benchserver
+
+# Coverage
+*.out
+*.cov

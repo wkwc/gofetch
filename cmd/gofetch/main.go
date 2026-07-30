@@ -24,7 +24,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/local/gofetch/internal/fetch"
+	"github.com/wkwc/gofetch/internal/fetch"
 )
 
 func main() {

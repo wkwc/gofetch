@@ -1,3 +1,3 @@
-module github.com/local/gofetch
+module github.com/wkwc/gofetch
 
 go 1.26

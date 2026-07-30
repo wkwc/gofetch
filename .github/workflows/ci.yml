@@ -66,8 +66,18 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Cache Go modules
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
       - name: Build Binary
-        run: go build -ldflags="-s -w" -o gofetch ./cmd/gofetch
+        run: go build -ldflags="-s -w" -trimpath -o gofetch ./cmd/gofetch
 
       - name: Upload Binary Artifact
         uses: actions/upload-artifact@v7
