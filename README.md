@@ -197,7 +197,6 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 
 ## Limitations
 
-- No proxy support yet (reads `HTTP_PROXY`/`HTTPS_PROXY` from env but not fully tested).
 - Resume state only stores completed *ranges*; partially written ranges are retried from scratch on resume (the file already has those bytes, so it's idempotent).
 
 ## License
