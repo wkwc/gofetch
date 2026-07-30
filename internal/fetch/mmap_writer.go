@@ -241,12 +241,12 @@ func allocateRawFile(path string, size int64, resume bool) (fileWriter, error) {
 	if size > 0 {
 		info, ferr := fd.Stat()
 		if ferr != nil {
-			fd.Close()
+			_ = fd.Close()
 			return nil, ferr
 		}
 		if info.Size() != size {
 			if terr := fd.Truncate(size); terr != nil {
-				fd.Close()
+				_ = fd.Close()
 				return nil, fmt.Errorf("truncate: %w", terr)
 			}
 		}

@@ -105,7 +105,7 @@ func TestRawFileWriterBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	rfw := &rawFileWriter{F: f}
 	if rfw.Bytes() != nil {
@@ -141,7 +141,7 @@ func TestAllocateFileWriterSmallFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("allocateFileWriter: %v", err)
 	}
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Size 0 → raw file writer
 	if _, ok := fw.(*rawFileWriter); !ok {
@@ -157,7 +157,7 @@ func TestAllocateFileWriterWithMmap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("allocateFileWriter: %v", err)
 	}
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// Size > 0 → should be mmap writer
 	if _, ok := fw.(*mmapWriter); !ok {
