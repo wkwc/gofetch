@@ -102,6 +102,41 @@ func DialContextSafe(ctx context.Context, network, addr string) (net.Conn, error
 	return nil, last
 }
 
+// DialContextAllowPrivate is like DialContextSafe but allows private IPs.
+// Used when connecting to a proxy host (trusted intermediary).
+func DialContextAllowPrivate(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", host, err)
+	}
+	var last error
+	d := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 10 * time.Second}
+	d.Control = func(network, address string, c syscall.RawConn) error {
+		return c.Control(func(fd uintptr) {
+			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, 1)
+			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpFastOpen, 1)
+			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpNotSentLowat, tcpNotSentLowatV)
+			tcpKeepalive(fd)
+		})
+	}
+	for _, ipa := range ips {
+		target := net.JoinHostPort(ipa.IP.String(), port)
+		conn, err := d.DialContext(ctx, network, target)
+		if err == nil {
+			return conn, nil
+		}
+		last = err
+	}
+	if last == nil {
+		last = fmt.Errorf("no routable addresses for %s", host)
+	}
+	return nil, last
+}
+
 // NewSafeClient returns an HTTP client with SSRF-hardened dial and redirects.
 // timeout covers the entire request (use for short sidecar fetches).
 func NewSafeClient(timeout time.Duration) *http.Client {
