@@ -106,15 +106,15 @@ const (
 // newAutoTransport builds an http.Transport with TCP keepalive,
 // proxy detection from environment, and optimized socket options
 // (TCP_NODELAY, TCP_FASTOPEN, TCP_NOTSENT_LOWAT, faster keepalive).
-// SSRF protection for target URLs is enforced at entry point (validateURL).
-// Proxy hosts (from HTTP_PROXY/HTTPS_PROXY) are trusted user config and
-// may resolve to private IPs (e.g., localhost).
+//
+// DialContextAuto pins each target dial to a non-private resolved IP
+// (DNS-rebinding resistant). Proxy hosts from HTTP(S)_PROXY/ALL_PROXY
+// are trusted operator config and may be private (e.g. 127.0.0.1).
 func newAutoTransport(ac AutoConfig) *http.Transport {
 	maxIdlePerHost := max(ac.Workers, 4)
 	tr := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		// Allow private IPs for proxy hosts; target URLs validated at entry point.
-		DialContext:           DialContextAllowPrivate,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           DialContextAuto,
 		ForceAttemptHTTP2:     true,
 		DisableCompression:    true,
 		MaxIdleConns:          256,

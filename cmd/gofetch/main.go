@@ -173,7 +173,7 @@ func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex stri
 	if parsed.Scheme != "https" {
 		return "", "", fmt.Errorf("sidecar URL must use HTTPS")
 	}
-	if isPrivateOrInternalIP(parsed.Hostname()) {
+	if fetch.HostIsPrivate(parsed.Hostname()) {
 		return "", "", fmt.Errorf("sidecar URL host %q resolves to a private/internal address (SSRF guard)", parsed.Hostname())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sidecarURL, nil)
@@ -212,24 +212,14 @@ func validateURL(rawURL string) error {
 		return fmt.Errorf("unsupported scheme: %s (use http or https)", u.Scheme)
 	}
 	// SSRF: reject URLs that resolve to loopback / private / link-local /
-	// multicast / unspecified IPs. Resolved once at startup so DNS
-	// rebound during a long download can't pivot the connection
-	// mid-stream into an internal host (DNS rebinding).
-	if isPrivateOrInternalIP(u.Hostname()) {
+	// multicast / unspecified IPs. Combined with DialContextAuto (which
+	// pins each dial to a non-private resolved IP), DNS rebinding cannot
+	// pivot the connection into an internal host mid-stream.
+	if fetch.HostIsPrivate(u.Hostname()) {
 		return fmt.Errorf("URL host %q resolves to a private/internal address (SSRF guard)",
 			u.Hostname())
 	}
 	return nil
-}
-
-// isPrivateOrInternalIP checks if a hostname resolves to a private, loopback,
-// link-local, multicast, or unspecified IP address.
-//
-// Conservative: DNS-resolution failure -> reject. An operator who's
-// pointed gofetch at a down host should not get a silent fallback to
-// "no host validation"; failure must surface as an error.
-func isPrivateOrInternalIP(hostname string) bool {
-	return fetch.HostIsPrivate(hostname)
 }
 
 // readSidecarFile reads a local sidecar hash file and parses it.

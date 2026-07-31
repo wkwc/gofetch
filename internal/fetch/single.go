@@ -21,6 +21,10 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		return err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	// Match range path: never accept compressed bodies that would
+	// desync Content-Length / integrity checks (transport also disables
+	// transparent gzip, but proxies can still inject encoding).
+	req.Header.Set("Accept-Encoding", "identity")
 
 	resp, err := d.client.Do(req)
 	if err != nil {

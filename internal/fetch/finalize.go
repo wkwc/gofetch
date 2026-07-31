@@ -129,13 +129,15 @@ func (d *Downloader) maybeSaveResume() {
 // recordCompleted appends a fully finished range to the durable
 // accumulator used by resume sidecars. Seeded from loadResume at
 // start so prior progress is never dropped when workers reset.
+//
+// Deliberately does not dedup on every call: hot path is one append
+// per completed chunk. saveResume and seedCompleted merge ranges.
 func (d *Downloader) recordCompleted(t Task) {
 	if d.resumePath == "" {
 		return
 	}
 	d.completedMu.Lock()
 	d.completed = append(d.completed, t)
-	d.completed = dedupTasks(d.completed)
 	d.completedMu.Unlock()
 }
 
@@ -147,9 +149,12 @@ func (d *Downloader) seedCompleted(tasks []Task) {
 }
 
 // snapshotCompleted returns a copy of accumulated completed ranges.
+// Compacts the accumulator (merge overlapping/adjacent) so repeated
+// resume saves do not retain one entry per historical chunk forever.
 func (d *Downloader) snapshotCompleted() []Task {
 	d.completedMu.Lock()
 	defer d.completedMu.Unlock()
+	d.completed = dedupTasks(d.completed)
 	out := make([]Task, len(d.completed))
 	copy(out, d.completed)
 	return out

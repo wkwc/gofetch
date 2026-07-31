@@ -70,8 +70,10 @@ func (b *idleBody) Read(p []byte) (int, error) {
 		buf []byte
 	}
 	// Private buffer avoids data race if we time out while the
-	// underlying Read is still running.
-	tmp := make([]byte, len(p))
+	// underlying Read is still running. Pool for typical sizes; on the
+	// rare abandon path (helper still blocked after forceClose wait)
+	// that one buffer is intentionally not returned to the pool.
+	tmp := acquireBuf(len(p))
 	ch := make(chan result, 1)
 	go func() {
 		n, err := b.r.Read(tmp)
@@ -82,16 +84,20 @@ func (b *idleBody) Read(p []byte) (int, error) {
 		b.forceClose()
 		// Drain the helper so the next Read does not race.
 		select {
-		case <-ch:
+		case res := <-ch:
+			releaseBuf(res.buf)
 		case <-time.After(2 * time.Second):
+			// Abandon: helper still owns tmp.
 		}
 		return 0, b.ctx.Err()
 	case <-b.timer.C:
 		// Unblock the in-flight Read by closing the body, then wait.
 		b.forceClose()
 		select {
-		case <-ch:
+		case res := <-ch:
+			releaseBuf(res.buf)
 		case <-time.After(2 * time.Second):
+			// Abandon: helper still owns tmp.
 		}
 		return 0, errBodyIdle
 	case res := <-ch:
@@ -105,6 +111,7 @@ func (b *idleBody) Read(p []byte) (int, error) {
 			}
 			b.timer.Reset(b.idle)
 		}
+		releaseBuf(res.buf)
 		return res.n, res.err
 	}
 }

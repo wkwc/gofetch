@@ -438,12 +438,9 @@ func (d *Downloader) verifyTaskRange(task Task, f fileWriter) error {
 	return d.manifest.VerifyRange(task.Start, task.End, buf)
 }
 
-// bufSizeSmall and bufSizeLarge bound the pooled buffer size so the pool
-// always returns reusable buffers and oversized requests allocate fresh.
-const (
-	bufSizeSmall = 64 * 1024
-	bufSizeLarge = 256 * 1024
-)
+// bufSizeLarge is the pooled read-buffer capacity. Requests larger than
+// this allocate a fresh slice (not returned to the pool).
+const bufSizeLarge = 256 * 1024
 
 // bufPool recycles per-worker read buffers at bufSizeLarge.
 var bufPool = sync.Pool{
@@ -454,10 +451,15 @@ var bufPool = sync.Pool{
 // served from the pool; larger requests allocate a fresh (non-pooled) slice
 // the caller releases by simply letting it be GC'd.
 func acquireBuf(n int) []byte {
+	if n <= 0 {
+		return nil
+	}
 	if n <= bufSizeLarge {
 		bp := bufPool.Get().(*[]byte)
 		if cap(*bp) < n {
-			// Undersized pool entry (should not happen) — allocate fresh.
+			// Undersized pool entry (should not happen with our New) —
+			// put it back and allocate fresh so we never leak the slot.
+			bufPool.Put(bp)
 			return make([]byte, n)
 		}
 		return (*bp)[:n]
@@ -466,8 +468,7 @@ func acquireBuf(n int) []byte {
 }
 
 // releaseBuf returns a buffer to the pool only when capacity is exactly
-// bufSizeLarge so the next acquireBuf(bufSizeLarge) never panics on a
-// short slice.
+// bufSizeLarge so the next acquireBuf never sees a short slice.
 func releaseBuf(b []byte) {
 	if cap(b) != bufSizeLarge {
 		return

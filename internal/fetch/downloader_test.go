@@ -29,6 +29,24 @@ func TestAllocateFileWriter(t *testing.T) {
 	if _, err := fw.WriteAt([]byte("world"), 512*1024); err != nil {
 		t.Fatalf("WriteAt mid: %v", err)
 	}
+	if _, ok := fw.(mmapWriterBytes); !ok {
+		t.Error("expected mmap writer for sized non-resume allocate")
+	}
+}
+
+// Resume-enabled first attempt (no partial file yet) must still prefer mmap.
+func TestAllocateFileWriterResumeFreshUsesMmap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fresh.bin")
+	fw, err := allocateFileWriter(path, 1024*1024, true)
+	if err != nil {
+		t.Fatalf("allocateFileWriter resume fresh: %v", err)
+	}
+	defer func() { _ = fw.Close() }()
+	wb, ok := fw.(mmapWriterBytes)
+	if !ok || wb.Bytes() == nil {
+		t.Fatal("expected mmap-backed writer for resume=true + missing file")
+	}
 }
 
 func TestAllocateRawZero(t *testing.T) {

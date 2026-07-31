@@ -46,8 +46,14 @@ jobs:
       - name: Staticcheck
         run: go install honnef.co/go/tools/cmd/staticcheck@latest && staticcheck ./...
 
+      - name: Deadcode
+        run: go install golang.org/x/tools/cmd/deadcode@latest && deadcode -test=false ./...
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.1.6
+          args: --timeout=5m
 
       - name: Unit tests
         run: go test -race -count=1 ./...

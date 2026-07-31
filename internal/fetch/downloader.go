@@ -142,22 +142,24 @@ func (d *Downloader) Download(ctx context.Context) error {
 				completed = d.snapshotCompleted()
 			} else if st != nil {
 				completed = st.Completed
-				sortByStart(completed)
-				d.seedCompleted(completed)
-
-				// Restore in-progress task if present
+				// Promote partial in-progress bytes into completed so
+				// uncompleted() skips already-written spans. The leftover
+				// [Start+Done, End] stays out of completed and is re-seeded.
+				// (Older code inverted this and marked the undownloaded
+				// remainder as done — permanent holes on resume.)
 				if st.InProgress != nil && st.InProgressDone > 0 {
-					// Adjust the task to resume from where we left off
-					remaining := Task{
-						Start: st.InProgress.Start + st.InProgressDone,
-						End:   st.InProgress.End,
-					}
-					if remaining.Start <= remaining.End {
-						completed = append(completed, remaining)
-						d.vlog("resuming in-progress range %d-%d (was at offset %d)",
-							remaining.Start, remaining.End, st.InProgressDone)
+					writtenEnd := st.InProgress.Start + st.InProgressDone - 1
+					if writtenEnd >= st.InProgress.Start && writtenEnd <= st.InProgress.End {
+						completed = append(completed, Task{
+							Start: st.InProgress.Start,
+							End:   writtenEnd,
+						})
+						d.vlog("resuming in-progress range %d-%d (done %d bytes)",
+							st.InProgress.Start, st.InProgress.End, st.InProgressDone)
 					}
 				}
+				completed = dedupTasks(completed)
+				d.seedCompleted(completed)
 
 				// Inherit the hash algo+value that was active when
 				// the sidecar was written, so a sha512 download
@@ -190,15 +192,14 @@ func (d *Downloader) Download(ctx context.Context) error {
 		// explicitly before the next attempt instead of using defer,
 		// which would leak file descriptors for earlier mirrors until
 		// the entire function returns.
-		downloaded := d.downloadFromMirror(ctx, activeURL, info, completed, f)
-		if downloaded.ok() {
+		err = d.downloadFromMirror(ctx, activeURL, info, completed, f)
+		if err == nil {
 			d.url = origURL
 			// Single ownership of Sync/Close/hash: leaves never finalize.
 			return d.finalize(f, nil)
 		}
 		_ = f.Close()
-
-		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, downloaded.err)
+		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, err)
 		// Keep on-disk bytes + completed ranges until the *next* iteration
 		// successfully probes and proves a size mismatch. Pre-probing the
 		// next URL here doubles RTT and can spuriously wipe on transient
@@ -218,25 +219,15 @@ func (d *Downloader) Download(ctx context.Context) error {
 }
 
 // downloadFromMirror attempts to download from a single URL using either
-// range or single-stream mode. Returns (true, nil) on success.
-func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, info probeInfo, completed []Task, f fileWriter) mirrorResult {
+// range or single-stream mode.
+func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, info probeInfo, completed []Task, f fileWriter) error {
 	// Temporarily set d.url so runTask/workerLoop use the active mirror.
 	savedURL := d.url
 	d.url = activeURL
 	defer func() { d.url = savedURL }()
 
-	var err error
 	if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
-		err = d.singleDownload(ctx, info.total, completed, f)
-	} else {
-		err = d.rangeDownload(ctx, info.total, completed, f)
+		return d.singleDownload(ctx, info.total, completed, f)
 	}
-	return mirrorResult{err: err}
+	return d.rangeDownload(ctx, info.total, completed, f)
 }
-
-// mirrorResult carries the outcome of a single mirror attempt.
-type mirrorResult struct {
-	err error
-}
-
-func (r mirrorResult) ok() bool { return r.err == nil }

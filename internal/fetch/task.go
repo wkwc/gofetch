@@ -84,8 +84,9 @@ func (q *Queue) Pop() (Task, bool) {
 // Len returns the number of pending tasks.
 func (q *Queue) Len() int {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.count
+	n := q.count
+	q.mu.Unlock()
+	return n
 }
 
 // growForced doubles capacity (or grows to count+1), ignoring maxCap.

@@ -72,6 +72,9 @@ func (d *Downloader) saveResume(completed []Task) error {
 		return err
 	}
 	tmp := d.resumePath + ".tmp"
+	// Clear a stale .tmp from a prior crash so O_EXCL cannot permanently
+	// disable resume saves for the rest of the download.
+	_ = os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
@@ -142,13 +145,6 @@ func clearResume(path string) error {
 		return fmt.Errorf("refusing to remove symlink at %s", path)
 	}
 	return os.Remove(path)
-}
-
-// sortByStart sorts tasks in-place by Start ascending.
-func sortByStart(tasks []Task) {
-	if len(tasks) > 1 {
-		sort.Slice(tasks, func(i, j int) bool { return tasks[i].Start < tasks[j].Start })
-	}
 }
 
 // dedupTasks merges overlapping or adjacent completed ranges and sorts

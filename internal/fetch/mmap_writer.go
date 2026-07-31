@@ -173,9 +173,10 @@ func allocateFileWriter(path string, size int64, resume bool) (fileWriter, error
 		info, err := os.Stat(path)
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
-				// Fresh download, no partial file yet — write-only
-				// with truncation is correct.
-				return allocateRawFile(path, size, false)
+				// Fresh download (resume enabled but no partial yet):
+				// still prefer mmap — previously this fell through to
+				// raw pwrite and paid one syscall per buffer.
+				return allocateMmapOrRaw(path, size, false)
 			}
 			// Some other stat failure (perm denied, vanished mid-call,
 			// etc). Refuse rather than silently truncating: the caller
@@ -183,9 +184,8 @@ func allocateFileWriter(path string, size int64, resume bool) (fileWriter, error
 			return nil, fmt.Errorf("stat %s for resume: %w (use --no-resume to retry)", path, err)
 		}
 		if info.Size() != size {
-			// File exists but wrong size — treat as fresh: truncate
-			// to expected size is correct here, but make it explicit.
-			return allocateRawFile(path, size, false)
+			// File exists but wrong size — treat as fresh (truncate).
+			return allocateMmapOrRaw(path, size, false)
 		}
 		// File exists at expected size: keep existing bytes.
 		fd, err := os.OpenFile(path, os.O_RDWR, 0o644)
@@ -205,9 +205,14 @@ func allocateFileWriter(path string, size int64, resume bool) (fileWriter, error
 		}
 		return mw, nil
 	}
+	return allocateMmapOrRaw(path, size, false)
+}
+
+// allocateMmapOrRaw prefers mmap; falls back to raw pwrite on failure.
+func allocateMmapOrRaw(path string, size int64, resume bool) (fileWriter, error) {
 	mw, err := newMmapWriter(path, size)
 	if err != nil {
-		return allocateRawFile(path, size, false)
+		return allocateRawFile(path, size, resume)
 	}
 	return mw, nil
 }

@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,25 +107,94 @@ func TestResumeClearAndCorrupt(t *testing.T) {
 	}
 }
 
-func TestSortByStart(t *testing.T) {
-	got := []Task{{30, 39}, {0, 9}, {20, 29}, {10, 19}}
-	sortByStart(got)
-	for i := 0; i < len(got)-1; i++ {
-		if got[i].Start > got[i+1].Start {
-			t.Fatalf("not sorted: %v", got)
-		}
-	}
-	// nil in stays nil out (no-op, no crash)
-	sortByStart(nil)
-	// single element (no-op, no crash)
-	sortByStart([]Task{{5, 10}})
-}
-
 func TestSaveResumeNoPath(t *testing.T) {
 	// resumePath=="" → saveResume is a no-op
 	d := &Downloader{resumePath: ""}
 	if err := d.saveResume([]Task{}); err != nil {
 		t.Errorf("empty resumePath should be no-op: %v", err)
+	}
+}
+
+// TestInProgressResumeMarksWrittenNotRemaining is a regression test for the
+// inverted in-progress restore bug: the already-written prefix must enter
+// completed so uncompleted() seeds only the leftover span.
+func TestInProgressResumeMarksWrittenNotRemaining(t *testing.T) {
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "partial.bin")
+	resumeFile := resumePath(outFile)
+	url := "https://example.com/file"
+	const total int64 = 10 * 1024 * 1024
+
+	// Simulate a crash mid-task: completed [0, 1MiB) and an in-progress
+	// task [1MiB, 2MiB) with 400KiB already written.
+	inProg := Task{Start: 1 << 20, End: (2 << 20) - 1}
+	const done int64 = 400 << 10
+	st := ResumeState{
+		URL:            url,
+		OutFile:        outFile,
+		TotalSize:      total,
+		Completed:      []Task{{Start: 0, End: (1 << 20) - 1}},
+		InProgress:     &inProg,
+		InProgressDone: done,
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resumeFile, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadResume(resumeFile, url, total)
+	if err != nil || loaded == nil {
+		t.Fatalf("loadResume: st=%v err=%v", loaded, err)
+	}
+
+	// Mirror the restore logic from Downloader.Download.
+	completed := loaded.Completed
+	if loaded.InProgress != nil && loaded.InProgressDone > 0 {
+		writtenEnd := loaded.InProgress.Start + loaded.InProgressDone - 1
+		if writtenEnd >= loaded.InProgress.Start && writtenEnd <= loaded.InProgress.End {
+			completed = append(completed, Task{
+				Start: loaded.InProgress.Start,
+				End:   writtenEnd,
+			})
+		}
+	}
+	completed = dedupTasks(completed)
+
+	// Written prefix must be complete.
+	wantWrittenEnd := inProg.Start + done - 1
+	foundWritten := false
+	for _, c := range completed {
+		if c.Start <= inProg.Start && c.End >= wantWrittenEnd {
+			foundWritten = true
+			break
+		}
+	}
+	if !foundWritten {
+		t.Fatalf("written span %d-%d not in completed: %v", inProg.Start, wantWrittenEnd, completed)
+	}
+
+	// Remaining span must NOT be marked complete.
+	remainStart := inProg.Start + done
+	for _, c := range completed {
+		if c.Start <= remainStart && c.End >= inProg.End {
+			t.Fatalf("remaining span %d-%d incorrectly covered by completed %v", remainStart, inProg.End, c)
+		}
+	}
+
+	// Gaps must include the leftover of the in-progress task.
+	gaps := uncompleted(Task{Start: 0, End: total - 1}, completed)
+	foundRemain := false
+	for _, g := range gaps {
+		if g.Start <= remainStart && g.End >= inProg.End {
+			foundRemain = true
+			break
+		}
+	}
+	if !foundRemain {
+		t.Fatalf("expected remaining gap covering %d-%d, gaps=%v", remainStart, inProg.End, gaps)
 	}
 }
 
