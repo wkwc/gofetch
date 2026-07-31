@@ -1,5 +1,18 @@
 # gofetch
 
+
+## Install
+
+```bash
+# From GitHub Releases (checksum-verified)
+curl -fsSL https://raw.githubusercontent.com/wkwc/gofetch/main/scripts/install.sh | bash
+
+# Or pin a version
+VERSION=v1.0.0 REPO=wkwc/gofetch bash scripts/install.sh
+```
+
+Verify releases with `SHA256SUMS` and `gh attestation verify` (see SECURITY.md).
+
 An opinionated concurrent HTTP downloader. Single binary, zero external dependencies — stdlib only.
 
 ```

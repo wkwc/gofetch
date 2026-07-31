@@ -85,23 +85,39 @@ jobs:
           ls -la dist/
           (cd dist && sha256sum gofetch-* > SHA256SUMS)
 
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist
+          format: spdx-json
+          output-file: dist/gofetch.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v3
         with:
-          subject-path: dist/gofetch-*
+          subject-path: |
+            dist/gofetch-*
+            dist/SHA256SUMS
+            dist/gofetch.spdx.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           body: |
-            ## Verify
-
+            ## Install
             ```bash
-            sha256sum -c SHA256SUMS
-            # GitHub artifact attestation (needs gh CLI ≥ 2.49):
-            gh attestation verify gofetch-<version>-linux-amd64 --repo ${{ github.repository }}
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | bash
+            # or pin: VERSION=${{ github.ref_name }} REPO=${{ github.repository }} bash scripts/install.sh
             ```
 
-            Static, CGO-free binaries. Zero runtime dependencies.
+            ## Verify
+            ```bash
+            sha256sum -c SHA256SUMS
+            gh attestation verify gofetch-${{ github.ref_name }}-linux-amd64 --repo ${{ github.repository }}
+            ```
+
+            Static, CGO-free binaries. Zero runtime dependencies. SPDX SBOM attached.
           files: dist/*
