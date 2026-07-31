@@ -27,6 +27,9 @@ import (
 	"github.com/wkwc/gofetch/internal/fetch"
 )
 
+// version is injected at link time: -ldflags="-X main.version=v1.2.3"
+var version = "dev"
+
 func main() {
 	os.Exit(run())
 }
@@ -39,6 +42,7 @@ func run() int {
 		hashFlag    = flag.String("h", "", "verify integrity (sha256:hex, sha512:hex, auto, or path to .sha256/.sha512 sidecar)")
 		noResume    = flag.Bool("no-resume", false, "disable resume (default: on)")
 		mirrorsFlag = flag.String("m", "", "comma-separated list of mirror URLs to try on failure")
+		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: gofetch [options] <url>")
@@ -58,6 +62,11 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "  gofetch -m mirror1,mirror2,mirror3 https://primary.com/file.bin")
 	}
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("gofetch", version)
+		return 0
+	}
 
 	if flag.NArg() != 1 {
 		flag.Usage()

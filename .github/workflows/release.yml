@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  GO_VERSION: "1.26.5"
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          EXT="${{ matrix.ext }}"
+          OUT="gofetch-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
+            -o "dist/${OUT}" ./cmd/gofetch
+          (cd dist && sha256sum "${OUT}" > "${OUT}.sha256")
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gofetch-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 7
+
+  release:
+    name: Sign & publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f -name 'gofetch-*' ! -name '*.sha256' -exec cp -v {} dist/ \;
+          ls -la dist/
+          (cd dist && sha256sum gofetch-* > SHA256SUMS)
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/gofetch-*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Verify
+
+            ```bash
+            sha256sum -c SHA256SUMS
+            # GitHub artifact attestation (needs gh CLI ≥ 2.49):
+            gh attestation verify gofetch-<version>-linux-amd64 --repo ${{ github.repository }}
+            ```
+
+            Static, CGO-free binaries. Zero runtime dependencies.
+          files: dist/*
