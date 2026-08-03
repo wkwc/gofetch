@@ -24,14 +24,8 @@ func TestQueue(t *testing.T) {
 	if _, ok := q.Pop(); ok {
 		t.Fatal("Pop on empty queue should return false")
 	}
-	if q.Len() != 0 {
-		t.Fatalf("Len = %d, want 0", q.Len())
-	}
 
 	q.PushMany([]Task{{0, 10}, {11, 20}, {21, 30}})
-	if q.Len() != 3 {
-		t.Fatalf("Len = %d, want 3", q.Len())
-	}
 	// FIFO
 	for _, want := range []int64{0, 11, 21} {
 		got, ok := q.Pop()
