@@ -113,13 +113,20 @@ func formatDuration(d time.Duration) string {
 // maybeSaveResume writes the resume state if at least 1 second has
 // passed since the last save. Cheap throttle to avoid I/O storms.
 // No-op when resume is disabled.
-func (d *Downloader) maybeSaveResume() {
+//
+// force=true bypasses the throttle: the caller (cancel path, run-end)
+// must always emit a final sidecar otherwise the last recordCompleted
+// of the run is silently dropped if it landed within the throttle
+// window — next run would re-fetch the bytes the loop already wrote.
+func (d *Downloader) maybeSaveResume(force bool) {
 	if d.resumePath == "" {
 		return
 	}
-	last := d.lastResumeSave.Load()
-	if last != 0 && time.Duration(time.Now().UnixNano()-last) < time.Second {
-		return
+	if !force {
+		last := d.lastResumeSave.Load()
+		if last != 0 && time.Duration(time.Now().UnixNano()-last) < time.Second {
+			return
+		}
 	}
 	if d.saveResume(d.snapshotCompleted()) == nil {
 		d.lastResumeSave.Store(time.Now().UnixNano())

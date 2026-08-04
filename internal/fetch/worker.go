@@ -133,6 +133,18 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 			d.requeueUnfinished(ctx, ws, task, queue)
 		case err != nil:
 			if isTransient(err) {
+				// The transient branch must honor the same stealFlag guard
+				// the ctx-cancel branch at line 130 uses, otherwise a
+				// cancelled read that surfaces as io.ErrUnexpectedEOF or
+				// errBodyIdle (rather than context.Canceled) after the
+				// monitor already pushed leftover+cancel results in two
+				// pushers of overlapping ranges onto the queue. The
+				// monitor's comment at monitor.go:42-46 explicitly states
+				// stealFlag exists to make this requeue skip; the original
+				// transient path missed that contract.
+				if ws.stealFlag.Swap(false) {
+					continue
+				}
 				d.vlog("task %d-%d transient error: %v", task.Start, task.End, err)
 				d.requeueUnfinished(ctx, ws, task, queue)
 			} else {

@@ -40,7 +40,17 @@ func (d *Downloader) saveResume(completed []Task) error {
 		return nil
 	}
 
-	// Capture in-progress task from any worker
+	// Capture in-progress task from any worker.
+	//
+	// workerState.reset() (worker.go) Stores curTask BEFORE bytesDone(=0)
+	// and bumps taskGen AFTER both — this seqcst ordering lets readers
+	// detect a mid-reset interleave (curTask=B, bytesDone=A.size) by
+	// re-checking taskGen, exactly as the steal plan does at
+	// monitor.stealPlan. Without this re-check, saveResume could persist
+	// (curTask=B, done=A.size), then loadResume silently marks
+	// bytes [B.Start, B.Start+A.size-1] as completed (downloader.go:150-160)
+	// even though they were never downloaded — silent corruption recoverable
+	// only by an explicit -h hash verify at end of run.
 	var inProgress *Task
 	var inProgressDone int64
 	for _, ws := range d.workerStates {
@@ -48,13 +58,21 @@ func (d *Downloader) saveResume(completed []Task) error {
 			continue
 		}
 		curTask := ws.curTask.Load()
-		if curTask != nil {
-			done := ws.bytesDone.Load()
-			if done > 0 {
-				inProgress = curTask
-				inProgressDone = done
-				break
-			}
+		if curTask == nil {
+			continue
+		}
+		gen := ws.taskGen.Load()
+		done := ws.bytesDone.Load()
+		// Re-check taskGen: if the worker reset() between the two reads
+		// above, curTask+done are from different generations and the pair
+		// is unsafe to persist.
+		if ws.taskGen.Load() != gen {
+			continue
+		}
+		if done > 0 {
+			inProgress = curTask
+			inProgressDone = done
+			break
 		}
 	}
 

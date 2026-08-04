@@ -53,7 +53,27 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	}
 
 	const chunkSize = 1 << 20 // 1 MiB
-	seeds := make([]Task, 0, (total+chunkSize-1)/chunkSize)
+	// Bound the seed slice cap to avoid an int64 overflow panic in
+	// `make` for server-controlled Content-Length/Content-Range values
+	// near MaxInt64: (total + chunkSize - 1) overflows there, the divisor
+	// returns a negative or astronomically large value and goruntime
+	// panics "makeslice: cap out of range". Pragmatic upper bound: any
+	// download > 1<<60 bytes (~1 EiB) is effectively unbounded; fall back
+	// to a sane cap so make can't panic. The actual seed count is
+	// appended lazily by splitRange over uncompleted() gaps anyway, so
+	// the cap is only a hint — over-cap is harmless, under-cap just
+	// costs one re-grow.
+	const saneMax = int64(1) << 60
+	var seedCap int64
+	if total < saneMax {
+		seedCap = (total + chunkSize - 1) / chunkSize
+		if seedCap < 0 {
+			seedCap = 0
+		}
+	} else {
+		seedCap = saneMax / chunkSize
+	}
+	seeds := make([]Task, 0, seedCap)
 	for _, gap := range uncompleted(Task{Start: 0, End: total - 1}, completed) {
 		seeds = append(seeds, splitRange(gap.Start, gap.Len(), chunkSize)...)
 	}
@@ -139,7 +159,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		select {
 		case <-ctx.Done():
 			if d.resumePath != "" {
-				d.maybeSaveResume()
+				d.maybeSaveResume(true)
 			}
 			<-done
 			return ctx.Err()
@@ -151,9 +171,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 			}
 			return nil
 		case <-saveC:
-			d.maybeSaveResume()
+			d.maybeSaveResume(false)
 		case <-resumeC:
-			d.maybeSaveResume()
+			d.maybeSaveResume(false)
 		case <-progressC:
 			d.printProgress(prog, false)
 		}
