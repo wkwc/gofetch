@@ -48,8 +48,14 @@ func scaleWorkers(totalSize int64, cores int) int {
 		chunkCount = 1
 	}
 	w := int(chunkCount) / 8
-	if w < cores/2 {
-		return max(4, cores/2)
+	// On single-CPU hosts (CI sandboxes, cgroup-pinned containers)
+	// cores/2 == 0, so the guard would produce a false negative for
+	// chunkCount 1..7 (w=0, but w<cores/2 is 0<0 = false), producing
+	// zero workers and a misleading "workers: 0" report. Clamp to
+	// at least 1 so the download always gets at least one worker.
+	minW := max(1, cores/2)
+	if w < minW {
+		return max(4, minW)
 	}
 	if w > 32 {
 		return 32
