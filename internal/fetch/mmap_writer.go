@@ -14,7 +14,6 @@ type fileWriter interface {
 	Sync() error
 	Close() error
 	Truncate(size int64) error
-	Seek(offset int64, whence int) (int64, error)
 }
 
 // rawFileWriter wraps *os.File for the fileWriter interface. Used as
@@ -40,11 +39,6 @@ func (r *rawFileWriter) Close() error { return r.F.Close() }
 // Truncate truncates the file to size.
 func (r *rawFileWriter) Truncate(size int64) error {
 	return r.F.Truncate(size)
-}
-
-// Seek sets the offset for the next Read/Write.
-func (r *rawFileWriter) Seek(offset int64, whence int) (int64, error) {
-	return r.F.Seek(offset, whence)
 }
 
 // Bytes returns nil for raw writers — the generic Read→buffer→write path
@@ -150,12 +144,6 @@ func (m *mmapWriter) Truncate(size int64) error {
 		m.data = data
 	}
 	return nil
-}
-
-// Seek sets the offset for the next Read/Write. Not typically used with
-// WriteAt, but provided for interface compliance.
-func (m *mmapWriter) Seek(offset int64, whence int) (int64, error) {
-	return m.fd.Seek(offset, whence)
 }
 
 // allocateFileWriter returns the fastest fileWriter for the given

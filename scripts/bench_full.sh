@@ -5,7 +5,6 @@ cd "$(dirname "$0")"
 
 BENCHSERVER=./benchserver
 GOFETCH=./gofetch
-ADDR=":9120"
 URL="http://127.0.0.1:9120/"
 TMPDIR=$(mktemp -d)
 trap 'kill %1 2>/dev/null; rm -rf "$TMPDIR"' EXIT

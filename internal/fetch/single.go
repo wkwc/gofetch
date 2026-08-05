@@ -11,10 +11,12 @@ import (
 // singleDownload is used when the server does not support Range:
 // one worker streams the entire body at offset 0 without Range headers.
 // The file writer f is managed by the caller (already open, will be closed by caller).
+//
+// Per-event progress (the live progress bar) is intentionally not wired here;
+// the caller threads progress through finalize() at the end. d.workerStates
+// stays nil on this path because there is no parallel work to monitor.
 func (d *Downloader) singleDownload(ctx context.Context, total int64, completed []Task, f fileWriter) error {
 	ws := newWorkerState()
-	prog := newProgress(total, []*workerState{ws})
-	seedResumeBytes(prog, completed)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
 	if err != nil {
@@ -98,7 +100,6 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		}
 	}
 	// Download owns finalize (Sync/Close/hash); do not double-close here.
-	_ = prog
 	return nil
 }
 

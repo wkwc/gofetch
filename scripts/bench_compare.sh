@@ -3,8 +3,6 @@ set -uo pipefail  # not -e, we'll track errors ourselves
 
 cd "$(dirname "$0")"
 
-export PATH="/home/user/.local/bin:$PATH"
-
 GOFETCH=$(pwd)/gofetch
 BENCHSERVER=$(pwd)/benchserver
 ARIA2C=$(which aria2c 2>/dev/null || echo "")

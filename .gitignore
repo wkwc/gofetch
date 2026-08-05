@@ -1,11 +1,6 @@
 # Runtime secrets
 .env
 
-# Database files
-*.db
-*.db-shm
-*.db-wal
-
 # Build artifacts
 /gofetch
 /benchserver
@@ -21,7 +16,6 @@ dist/
 *.gofetch.resume.tmp
 
 # Temporary files
-/tmp/
 tmp/
 
 # Coverage

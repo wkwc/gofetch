@@ -16,6 +16,3 @@ func munmapSys(_ []byte) error {
 
 // hintSequential is a no-op on non-Linux platforms.
 func hintSequential(_ []byte) error { return nil }
-
-// tcpSetKeepalive is a no-op on non-Linux platforms.
-func tcpSetKeepalive(_ uintptr) {}

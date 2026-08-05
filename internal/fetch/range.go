@@ -28,6 +28,14 @@ func seedResumeBytes(prog *progress, completed []Task) {
 // runs workers until the queue drains, and signals completion.
 // The file writer f is managed by the caller (already open, will be closed by caller).
 func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed []Task, f fileWriter) error {
+	if total <= 0 {
+		// Ranges with unknown size cannot seed tasks safely — fall back
+		// to single-stream rather than "succeeding" with an empty file.
+		// workerStates is left nil: there's no parallel work to monitor
+		// and resume has no per-range byte counts to persist.
+		return d.singleDownload(ctx, total, completed, f)
+	}
+
 	states := make([]*workerState, d.workersN)
 	for i := range states {
 		states[i] = newWorkerState()
@@ -37,13 +45,6 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 
 	prog := newProgress(total, states)
 	seedResumeBytes(prog, completed)
-
-	if total <= 0 {
-		// Ranges with unknown size cannot seed tasks safely — fall back
-		// to single-stream rather than "succeeding" with an empty file.
-		_ = prog
-		return d.singleDownload(ctx, total, completed, f)
-	}
 
 	// Try to load manifest
 	manifestPath := d.outFile + ".gofetch.manifest"

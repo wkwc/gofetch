@@ -232,23 +232,16 @@ func validateURL(rawURL string) error {
 }
 
 // readSidecarFile reads a local sidecar hash file and parses it.
-// Validates that the path is safe (no directory traversal).
+// Accepts any readable absolute or relative path; symlinks are followed
+// by os.ReadFile. We do not jail the path to cwd: README documents
+// `gofetch -h /tmp/file.sha256` and similar, and sidecar content is
+// parsed (never executed), so the only risk is reading an attacker-
+// chosen file — equivalent to running `cat` on it.
 func readSidecarFile(path string) (algo, hashHex string, err error) {
-	// Resolve to absolute path and ensure it doesn't escape the working directory
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", "", fmt.Errorf("resolve sidecar path: %w", err)
 	}
-	// Ensure the path is within the current working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", "", fmt.Errorf("get working dir: %w", err)
-	}
-	rel, err := filepath.Rel(cwd, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", "", fmt.Errorf("sidecar path %s escapes working directory", path)
-	}
-
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return "", "", fmt.Errorf("read sidecar: %w", err)

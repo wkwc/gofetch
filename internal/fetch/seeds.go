@@ -27,12 +27,11 @@ func splitRange(offset, length, chunkSize int64) []Task {
 	return out
 }
 
-// addSat returns x+y and whether it overflowed int64.
+// addSat returns x+y and whether it overflowed int64. Caller guarantees y>=0
+// (splitRange returns early when length<=0), so only positive overflow is
+// possible; the saturating value is math.MaxInt64.
 func addSat(x, y int64) (int64, bool) {
 	if y > 0 && x > int64(^uint64(0)>>1)-y {
-		return int64(^uint64(0) >> 1), true
-	}
-	if y < 0 && x < int64(^uint64(0)>>1)+y {
 		return int64(^uint64(0) >> 1), true
 	}
 	return x + y, false

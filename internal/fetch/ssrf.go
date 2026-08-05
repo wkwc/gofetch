@@ -66,16 +66,21 @@ func CheckRedirectSafe(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// tunedDialer returns a Dialer with TCP keepalive / FASTOPEN / NODELAY.
+// tunedDialer returns a Dialer with TCP keepalive / FASTOPEN / NODELAY / NOTSENT_LOWAT.
+//
+// Per-fd tuning lives in tuneFD (build-tagged per platform) so this file
+// stays portable; the Linux variant applies TCP_NODELAY+FASTOPEN+NOTSENT_LOWAT
+// + aggressive keepalive, while non-Linux platforms no-op.
 func tunedDialer() *net.Dialer {
 	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 10 * time.Second}
 	d.Control = func(network, address string, c syscall.RawConn) error {
-		return c.Control(func(fd uintptr) {
-			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, 1)
-			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpFastOpen, 1)
-			_ = syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, tcpNotSentLowat, tcpNotSentLowatV)
-			tcpKeepalive(fd)
-		})
+		var ctrlErr error
+		if err := c.Control(func(fd uintptr) {
+			ctrlErr = tuneFD(fd)
+		}); err != nil {
+			return err
+		}
+		return ctrlErr
 	}
 	return d
 }

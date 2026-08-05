@@ -296,7 +296,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 	if lastErr != nil {
 		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, maxHTTPStatusRetries, lastErr)
 	}
-	return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status", task.Start, task.End, maxHTTPStatusRetries)
+	return fmt.Errorf("range %d-%d: exhausted retries on retryable HTTP status with no last error (invariant violation)", task.Start, task.End)
 }
 
 // sleepCtx sleeps for d, returning false if ctx is cancelled first.
@@ -325,7 +325,7 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 	// Zero-copy fast path when the writer exposes the underlying mmap slice.
 	if wb, ok := f.(mmapWriterBytes); ok {
 		if data := wb.Bytes(); data != nil {
-			return d.readBodyDirect(idle, task, wb, ws, data)
+			return d.readBodyDirect(idle, task, ws, data)
 		}
 	}
 
@@ -369,8 +369,7 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 	}
 }
 
-func (d *Downloader) readBodyDirect(body io.Reader, task Task, wb mmapWriterBytes, ws *workerState, data []byte) error {
-	_ = wb
+func (d *Downloader) readBodyDirect(body io.Reader, task Task, ws *workerState, data []byte) error {
 	taskEnd := task.End
 	if taskEnd+1 > int64(len(data)) {
 		return fmt.Errorf("mmap slice short: end=%d len=%d", taskEnd, len(data))
