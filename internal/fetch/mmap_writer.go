@@ -111,11 +111,18 @@ func (m *mmapWriter) Close() error {
 	if m.data == nil {
 		return nil
 	}
-	_ = m.fd.Sync()
+	syncErr := m.fd.Sync()
 	unmapErr := munmapSys(m.data)
 	m.data = nil
 	closeErr := m.fd.Close()
 	m.fd = nil
+	// Surface fsync failures first: a lost sync means dirty pages may
+	// not be durable on disk — callers must treat the write as
+	// non-durable even if later integrity verification reads back
+	// page-cache bytes (which can read fine despite stale on-disk state).
+	if syncErr != nil {
+		return syncErr
+	}
 	if unmapErr != nil {
 		return unmapErr
 	}
@@ -131,8 +138,11 @@ func (m *mmapWriter) Truncate(size int64) error {
 		return err
 	}
 	if size < m.size {
-		// Remap to smaller size
+		// Remap to smaller size. Nil out m.data immediately after
+		// munmap so a concurrent reader can't observe a dangling
+		// pointer if the subsequent mmapSys fails (use-after-free).
 		unmapErr := munmapSys(m.data)
+		m.data = nil
 		if unmapErr != nil {
 			return unmapErr
 		}

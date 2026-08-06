@@ -108,6 +108,13 @@ func (d *Downloader) Download(ctx context.Context) error {
 		if i > 0 {
 			d.vlog("mirror %d/%d failed (%v), trying mirror %d/%d: %s",
 				i, len(urls), lastErr, i+1, len(urls), activeURL)
+			// Reset retry counters when failing over to a fresh mirror:
+			// the per-range budget should not be shared across mirrors
+			// (a range that exhausted retries against mirror 1 deserves
+			// a full retry budget against the next probed mirror).
+			d.retryMu.Lock()
+			d.retryCount = nil
+			d.retryMu.Unlock()
 		}
 		d.startTime = time.Now()
 
