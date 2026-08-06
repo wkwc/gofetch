@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
 
 const maxSizeMB = 4096
@@ -73,13 +74,20 @@ func main() {
 		}
 	})
 
-	addr := ":9120"
+	addr := "127.0.0.1:9120"
 	if a := os.Getenv("BENCH_ADDR"); a != "" {
 		addr = a
 	}
 
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           nil,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	fmt.Fprintf(os.Stderr, "benchserver listening on %s (%d MB payload)\n", addr, sizeMB)
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
