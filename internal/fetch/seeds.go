@@ -14,7 +14,18 @@ func splitRange(offset, length, chunkSize int64) []Task {
 		// Treat as "very large" file; cap at int64 max
 		end = int64(^uint64(0) >> 1)
 	}
-	n := (length + chunkSize - 1) / chunkSize
+	// n = ceil(length / chunkSize), saturating to avoid int64 overflow
+	// panic in `make` for server-controlled values near MaxInt64.
+	n := length / chunkSize
+	if rem := length % chunkSize; rem != 0 {
+		n++
+	}
+	const saneChunkCount = int64(1) << 20
+	if n > saneChunkCount {
+		n = saneChunkCount
+	} else if n < 0 {
+		n = 0
+	}
 	out := make([]Task, 0, n)
 	for cursor := offset; cursor < end; {
 		stop := cursor + chunkSize
