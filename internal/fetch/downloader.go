@@ -5,6 +5,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -180,11 +181,32 @@ func (d *Downloader) Download(ctx context.Context) error {
 				}
 				d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
 			} else {
-				// URL mismatch (typical on mirror failover): keep any
-				// in-memory completed ranges from a same-size prior attempt.
-				completed = d.snapshotCompleted()
-				if len(completed) > 0 {
-					d.vlog("reusing %d in-memory completed ranges for mirror", len(completed))
+				// URL mismatch (typical on mirror failover): the on-disk
+				// sidecar is for a different URL, so we look at in-memory
+				// completed ranges carried from a prior attempt.
+				//
+				// Two mirrors that report the *same* size may carry
+				// *different* bytes (a stale snapshot, a misconfigured
+				// mirror, a same-length man-in-the-middle). Without a
+				// per-chunk manifest to vouch for the bytes a prior
+				// mirror wrote, reusing completed ranges would silently
+				// splice bytes from two different files into the output
+				// and only show up as a final whole-file hash mismatch.
+				// Per-chunk verification during the next download
+				// (worker.go VerifyChunk) is only consulted when a
+				// manifest is loaded — so gate reuse on its presence.
+				if d.manifest != nil {
+					completed = d.snapshotCompleted()
+					if len(completed) > 0 {
+						d.vlog("reusing %d in-memory completed ranges for mirror (manifest vouches)", len(completed))
+					}
+				} else {
+					n := len(d.snapshotCompleted())
+					completed = nil
+					d.seedCompleted(nil)
+					if n > 0 {
+						d.vlog("mirror switch without manifest; discarded %d in-memory ranges to avoid cross-mirror splicing", n)
+					}
 				}
 			}
 		}
@@ -207,6 +229,15 @@ func (d *Downloader) Download(ctx context.Context) error {
 		}
 		_ = f.Close()
 		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, err)
+		// User-initiated cancel (Ctrl-C / timeout): the cancel path in
+		// range.go already flushed a durable sidecar via maybeSaveResume(true).
+		// Do NOT clear it, do NOT fail over to the next mirror, and do NOT
+		// delete the partial output — the user asked to stop, not to retry.
+		// Returning here leaves the resume sidecar intact so the next
+		// invocation resumes from the flushed progress.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return lastErr
+		}
 		// Keep on-disk bytes + completed ranges until the *next* iteration
 		// successfully probes and proves a size mismatch. Pre-probing the
 		// next URL here doubles RTT and can spuriously wipe on transient
@@ -218,6 +249,10 @@ func (d *Downloader) Download(ctx context.Context) error {
 		// Clear URL-keyed resume sidecar; in-memory completed survives
 		// for same-size failover. Size mismatch is handled after the
 		// next successful probe (below, at loop top via seed logic).
+		// NOTE: a genuine same-size mirror MUST NOT reuse completed
+		// ranges across a *different host* — see resetCompletedForHost
+		// below, which discards the accumulator unless a per-chunk
+		// manifest can vouch for the bytes.
 		_ = clearResume(d.resumePath)
 		d.vlog("mirror failed; keeping %d completed ranges pending next probe",
 			len(d.snapshotCompleted()))

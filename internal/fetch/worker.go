@@ -356,8 +356,14 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 			if errors.Is(rerr, io.EOF) {
 				// Inclusive End: full range requires cursor == end+1.
 				if cursor <= end {
-					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes",
-						cursor-task.Start, task.Len())
+					// Wrap io.ErrUnexpectedEOF so isTransient() (which
+					// tests errors.Is(err, io.ErrUnexpectedEOF)) treats a
+					// server that closed mid-range as retryable and the
+					// worker requeues the range instead of fatally
+					// aborting the download. A plain fmt.Errorf here loses
+					// the transient classification.
+					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes: %w",
+						cursor-task.Start, task.Len(), io.ErrUnexpectedEOF)
 				}
 				return nil
 			}
@@ -405,7 +411,7 @@ func (d *Downloader) readBodyDirect(body io.Reader, task Task, ws *workerState, 
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
 				if cursor < taskSize {
-					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes", cursor, taskSize)
+					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes: %w", cursor, taskSize, io.ErrUnexpectedEOF)
 				}
 				return nil
 			}

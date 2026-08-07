@@ -254,3 +254,191 @@ func TestDedupTasks(t *testing.T) {
 		})
 	}
 }
+
+// TestDropCompletedOverlapping exercises the G2 surgical-trim helper:
+// only the actual bad byte ranges are removed from `completed`, with
+// the remaining good fragments kept. Because completed is stored merged
+// (adjacent/overlapping ranges unioned to one Task), the helper must
+// SUBTRACT bad ranges, not drop whole merged tasks.
+func TestDropCompletedOverlapping(t *testing.T) {
+	tests := []struct {
+		name      string
+		completed []Task
+		bad       []ChunkHash
+		want      []Task
+	}{
+		{"nil bad (merged unchanged)",
+			[]Task{{0, 9}, {10, 19}}, nil,
+			[]Task{{0, 19}}}, // dedupTasks unions the adjacent ranges
+		{"drop the one bad chunk from a contiguous file",
+			[]Task{{0, 9}, {10, 19}, {20, 29}},
+			[]ChunkHash{{Start: 10, End: 19, Hash: "x"}},
+			[]Task{{0, 9}, {20, 29}}},
+		{"partial overlap keeps the good fragments on both sides",
+			[]Task{{5, 25}},
+			[]ChunkHash{{Start: 15, End: 19, Hash: "x"}},
+			[]Task{{5, 14}, {20, 25}}},
+		{"two bad chunks drop two spans from a contiguous file",
+			[]Task{{0, 9}, {10, 19}, {20, 29}, {30, 39}},
+			[]ChunkHash{{Start: 10, End: 19, Hash: "x"}, {Start: 30, End: 39, Hash: "y"}},
+			[]Task{{0, 9}, {20, 29}}},
+		{"disjoint completed task fully survives",
+			[]Task{{50, 59}},
+			[]ChunkHash{{Start: 0, End: 9, Hash: "x"}},
+			[]Task{{50, 59}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &Downloader{}
+			d.seedCompleted(tt.completed)
+			d.dropCompletedOverlapping(tt.bad)
+			got := d.snapshotCompleted()
+			if !tasksEqualUnordered(got, tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// tasksEqualUnordered compares two []Task ignoring order (dropCompleted-
+// Overlapping preserves order, but being order-tolerant makes the test
+// robust to future dedupTasks subtle changes).
+func tasksEqualUnordered(a, b []Task) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, x := range a {
+		found := false
+		for _, y := range b {
+			if x == y {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// TestFinalizeSurgicalTrimOnCorruptChunk is the G2 fix end-to-end-style
+// regression: a completed download whose on-disk bytes for ONE manifest
+// chunk were corrupted (e.g. a torn write) must, on finalize, trim the
+// resume sidecar to delete only that chunk's byte range — leaving the
+// surrounding good ranges marked completed so the next run re-fetches
+// just the bad span. Before the fix finalize cleared the ENTIRE sidecar
+// on any integrity failure, forcing a full re-download.
+func TestFinalizeSurgicalTrimOnCorruptChunk(t *testing.T) {
+	// 4 chunks of 10 bytes: 0-9, 10-19, 20-29, 30-39.
+	payload := makePayload(40)
+	chunkHash := func(s, e int64) string { return sha256Hex(payload[s : e+1]) }
+	m := &Manifest{
+		Version: 1,
+		Algo:    "sha256",
+		Chunks: []ChunkHash{
+			{0, 9, chunkHash(0, 9)},
+			{10, 19, chunkHash(10, 19)},
+			{20, 29, chunkHash(20, 29)},
+			{30, 39, chunkHash(30, 39)},
+		},
+	}
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+	if err := os.WriteFile(outFile, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	url := "https://example.com/file"
+
+	d := &Downloader{
+		url:           url,
+		outFile:       outFile,
+		totalSize:     40,
+		manifest:      m,
+		resumePath:    resumePath(outFile),
+		resumeEnabled: true,
+		quiet:         true,
+	}
+	// The whole file is recorded as completed (the download finished).
+	d.seedCompleted([]Task{{0, 39}})
+
+	// Corrupt chunk 10-19 on disk (a torn write / bit rot).
+	corrupt := append([]byte(nil), payload...)
+	copy(corrupt[10:20], "ZZZZZZZZZZ")
+	if err := os.WriteFile(outFile, corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// finalize must fail verification (corruption present) …
+	if err := d.finalize(nil, nil); err == nil {
+		t.Fatal("expected finalize to fail on corrupted chunk, got nil")
+	}
+	// … and must NOT clear the sidecar (manifest localizes corruption).
+	if _, err := os.Stat(d.resumePath); err != nil {
+		t.Fatalf("resume sidecar should survive manifest integrity failure: %v", err)
+	}
+	st, err := loadResume(d.resumePath, url, 40)
+	if err != nil || st == nil {
+		t.Fatalf("loadResume: st=%v err=%v", st, err)
+	}
+	// Sidecar's completed must EXCLUDE the corrupt chunk's span (10-19)
+	// and retain the good spans (0-9, 20-39).
+	for _, c := range st.Completed {
+		if c.Start <= 19 && c.End >= 10 {
+			t.Fatalf("corrupt span 10-19 still in completed: %+v", st.Completed)
+		}
+	}
+	// And the good bytes (0-9 and 20-39) must still be claimed complete.
+	covering := func(s, e int64) bool {
+		for _, c := range st.Completed {
+			if c.Start <= s && c.End >= e {
+				return true
+			}
+		}
+		return false
+	}
+	if !covering(0, 9) {
+		t.Errorf("good span 0-9 dropped from completed: %+v", st.Completed)
+	}
+	if !covering(20, 39) {
+		t.Errorf("good span 20-39 dropped from completed: %+v", st.Completed)
+	}
+}
+
+// TestFinalizeClearsOnNoManifestHashFailure pins the no-manifest
+// failure policy: without a per-chunk manifest to localize corruption,
+// finalize clears the sidecar so the next run re-downloads everything
+// (rather than skipping ranges that may be corrupt).
+func TestFinalizeClearsOnNoManifestHashFailure(t *testing.T) {
+	payload := makePayload(40)
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+	if err := os.WriteFile(outFile, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	url := "https://example.com/file"
+	d := &Downloader{
+		url:           url,
+		outFile:       outFile,
+		totalSize:     40,
+		expectedHash:  "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef0", // wrong: forces verifyFileHash failure
+		hashAlgo:      "sha256",
+		resumePath:    resumePath(outFile),
+		resumeEnabled: true,
+		quiet:         true,
+	}
+	d.seedCompleted([]Task{{0, 39}})
+	// Pre-create the sidecar so we can assert it gets cleared.
+	if err := d.saveResume(d.snapshotCompleted()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(d.resumePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.finalize(nil, nil); err == nil {
+		t.Fatal("expected finalize to fail on hash mismatch, got nil")
+	}
+	if _, err := os.Stat(d.resumePath); !os.IsNotExist(err) {
+		t.Fatalf("resume sidecar must be cleared on no-manifest integrity failure; stat err=%v", err)
+	}
+}

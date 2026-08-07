@@ -94,9 +94,21 @@ func (d *Downloader) singleDownload(ctx context.Context, total int64, completed 
 		return fmt.Errorf("server closed connection early: got %d of expected %d bytes", cursor, total)
 	}
 	// Unknown-size downloads: drop any stale tail from a larger prior file.
+	// Invariant: any Truncate-to-smaller MUST be paired with a reset of the
+	// resume accumulator (seedCompleted(nil) + clearResume), otherwise
+	// `completed` keeps pointing at byte ranges past the new EOF and the
+	// next run would silently skip the (now-missing) tail. Single-stream
+	// downloads currently don't persist resume mid-stream, so dropping the
+	// accumulator here is both safe and the documented contract for any
+	// future caller that does (resumable single-stream is the obvious next
+	// feature for the InProgress/InProgressDone sidecar fields).
 	if total <= 0 && cursor >= 0 {
 		if err := f.Truncate(cursor); err != nil {
 			return fmt.Errorf("truncate to %d: %w", cursor, err)
+		}
+		if d.resumePath != "" {
+			d.seedCompleted(nil)
+			_ = clearResume(d.resumePath)
 		}
 	}
 	// Download owns finalize (Sync/Close/hash); do not double-close here.

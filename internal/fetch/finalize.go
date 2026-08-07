@@ -14,11 +14,27 @@ import (
 // finalize. Always Sync+Close before integrity checks so verification reads
 // durable bytes. Quiet mode suppresses UI only — never skips Sync/Close/hash.
 func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
-	// Always clear the resume sidecar on exit, success OR failure —
-	// leaving stale state on disk lets the next run silently skip
-	// ranges, so we err on the side of forcing a full re-download.
+	// Resume sidecar lifecycle on the way out:
+	//   - success                       → clear (no longer needed)
+	//   - failure WITH a per-chunk manifest → KEEP: finalize already
+	//     surgically trimmed the corrupt byte ranges (BadChunks) so the
+	//     next run re-fetches only those. Self-correcting: a missed
+	//     corruption gets caught next run and re-trimmed.
+	//   - failure WITHOUT a manifest    → clear: corruption can't be
+	//     localized to a chunk, so keeping `completed` would make the
+	//     next run skip the bad ranges and fail forever. Force a full
+	//     re-download to guarantee recovery.
 	if d.resumePath != "" {
-		defer func() { _ = clearResume(d.resumePath) }()
+		defer func() {
+			switch {
+			case err == nil:
+				_ = clearResume(d.resumePath)
+			case d.manifest != nil:
+				// keep trimmed sidecar (see comment above)
+			default:
+				_ = clearResume(d.resumePath)
+			}
+		}()
 	}
 	if prog == nil {
 		states := make([]*workerState, max(d.workersN, 1))
@@ -53,6 +69,19 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 		if err := d.manifest.VerifyFull(d.outFile); err != nil {
 			if !d.quiet {
 				fmt.Fprint(os.Stderr, "FAILED\n")
+			}
+			// Surgical resume trim: identify which chunk(s) actually hash
+			// mismatch and drop just those byte ranges from the
+			// accumulator, then persist a trimmed sidecar. The next run
+			// re-fetches only the corrupt spans instead of the whole
+			// file. (Manifest-less hash failures fall through to the
+			// "no manifest" branch of the clear-defer above, which clears
+			// entirely — the only safe option without per-chunk locality.)
+			if d.resumePath != "" {
+				if bad := d.manifest.BadChunks(d.outFile); len(bad) > 0 {
+					d.dropCompletedOverlapping(bad)
+					_ = d.saveResume(d.snapshotCompleted())
+				}
 			}
 			return err
 		}
@@ -152,6 +181,64 @@ func (d *Downloader) recordCompleted(t Task) {
 func (d *Downloader) seedCompleted(tasks []Task) {
 	d.completedMu.Lock()
 	d.completed = dedupTasks(append([]Task(nil), tasks...))
+	d.completedMu.Unlock()
+}
+
+// dropCompletedOverlapping surgically trims the resume accumulator so
+// that the byte ranges corresponding to corrupt manifest chunks are no
+// longer claimed as completed — the next run re-fetches just those
+// spans instead of the entire file. Because `completed` is stored
+// merged (dedupTasks unions adjacent/overlapping ranges into one big
+// Task), a naive "drop any task that overlaps a bad chunk" would
+// discard the whole merged range and be no better than clearing. We
+// instead SUBTRACT the union of bad byte ranges from each completed
+// task, keeping the surviving fragments.
+//
+// bad chunks are [c.Start, c.End] inclusive; converted to Task
+// internally. Returns the trimmed accumulator via d.completed.
+func (d *Downloader) dropCompletedOverlapping(bad []ChunkHash) {
+	if len(bad) == 0 {
+		return
+	}
+	// Build sorted + merged bad byte ranges.
+	badRanges := make([]Task, 0, len(bad))
+	for _, c := range bad {
+		badRanges = append(badRanges, Task{Start: c.Start, End: c.End})
+	}
+	badRanges = dedupTasks(badRanges) // sorts + merges, O(n log n)
+
+	d.completedMu.Lock()
+	kept := d.completed[:0]
+	for _, t := range d.completed {
+		// Subtract every bad range that intersects [t.Start, t.End];
+		// badRanges is sorted by Start so we can stop early.
+		cursor := t.Start
+		droppedAny := false
+		for _, b := range badRanges {
+			if b.End < cursor {
+				continue // bad range entirely before our cursor
+			}
+			if b.Start > t.End {
+				break // no further bad range touches this task
+			}
+			// b intersects [cursor, t.End] (and b.Start >= cursor, b.End <= t.End region)
+			if b.Start > cursor {
+				kept = append(kept, Task{Start: cursor, End: b.Start - 1})
+			}
+			cursor = b.End + 1
+			droppedAny = true
+			if cursor > t.End {
+				break
+			}
+		}
+		if cursor <= t.End {
+			kept = append(kept, Task{Start: cursor, End: t.End})
+		} else if !droppedAny && cursor == t.Start {
+			// Defensive: cursor never advanced AND nothing dropped → t untouched.
+			kept = append(kept, t)
+		}
+	}
+	d.completed = dedupTasks(kept)
 	d.completedMu.Unlock()
 }
 

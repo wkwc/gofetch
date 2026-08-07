@@ -1,11 +1,13 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -250,5 +252,39 @@ func TestStealPlanZeroProgress(t *testing.T) {
 	_, _, ok := ws.stealPlan(time.Now().Add(2 * time.Second))
 	if ok {
 		t.Error("expected no steal when bytesDone is 0")
+	}
+}
+
+// TestReadBodyMidRangeEOFIsTransient pins the G6 fix: readBody wrapping
+// a plain io.EOF received mid-range (cursor < end) as io.ErrUnexpectedEOF
+// so that isTransient() classifies the failure as retryable and the
+// worker requeues the range. A bytes.Reader surfaces plain io.EOF (not
+// ErrUnexpectedEOF), which is exactly the branch that previously
+// returned a non-transient fmt.Errorf and fatally aborted downloads.
+func TestReadBodyMidRangeEOFIsTransient(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mid.bin")
+	fw, err := allocateFileWriter(path, 4096, false)
+	if err != nil {
+		t.Fatalf("allocateFileWriter: %v", err)
+	}
+	defer func() { _ = fw.Close() }()
+
+	d := &Downloader{bufSize: 4096}
+	// Task wants bytes 0-1023, but the body only has 100 bytes then EOF.
+	task := Task{Start: 0, End: 1023}
+	ws := newWorkerState()
+	ws.reset(task)
+	body := io.NopCloser(bytes.NewReader(make([]byte, 100)))
+
+	err = d.readBody(context.Background(), task, fw, ws, body)
+	if err == nil {
+		t.Fatal("expected an error for mid-range EOF, got nil")
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("mid-range EOF must wrap io.ErrUnexpectedEOF so isTransient retries; got %v", err)
+	}
+	if !isTransient(err) {
+		t.Fatalf("isTransient must classify mid-range EOF as retryable; got false for %v", err)
 	}
 }

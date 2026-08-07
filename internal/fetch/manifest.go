@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
 )
 
@@ -78,6 +79,12 @@ func (m *Manifest) VerifyChunk(start, end int64, data []byte) error {
 // [start, end] by hashing the corresponding slice of data. data must be
 // the complete bytes for that range (data[0] == file byte at start).
 // Partial overlaps are skipped (verified later by VerifyFull).
+//
+// The naive implementation scanned all M chunks linearly for each task,
+// making post-task verification O(N·M) overall. Chunks are kept sorted
+// by Start (buildIndex), so binary-search to the first chunk with
+// Start >= start and iterate only while Start <= end — turning the hot
+// path into O(log M + k) where k is the contained count.
 func (m *Manifest) VerifyRange(start, end int64, data []byte) error {
 	if m == nil {
 		return nil
@@ -86,8 +93,27 @@ func (m *Manifest) VerifyRange(start, end int64, data []byte) error {
 	if int64(len(data)) < want {
 		return fmt.Errorf("manifest: VerifyRange short buffer: have %d want %d", len(data), want)
 	}
-	for _, c := range m.Chunks {
-		if c.Start < start || c.End > end {
+	m.buildIndex()
+	chunks := m.Chunks
+	// Find first chunk with Start >= start. sort.Search semantics.
+	lo, hi := 0, len(chunks)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if chunks[mid].Start < start {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	for i := lo; i < len(chunks); i++ {
+		c := chunks[i]
+		if c.Start > end {
+			break
+		}
+		// c.Start >= start (binary-search precondition) and c.Start <= end.
+		// Fully contained iff c.End <= end; skip partial overlaps (left
+		// edge aligned but right edge past end) — they are covered by VerifyFull.
+		if c.End > end {
 			continue
 		}
 		off := c.Start - start
@@ -138,6 +164,61 @@ func (m *Manifest) VerifyFull(path string) error {
 	return nil
 }
 
+// BadChunks reads path and returns every manifest chunk whose on-disk
+// bytes do not match the expected hash. Used by finalize (on a
+// VerifyFull failure with a manifest) to surgically trim the resume
+// sidecar: only the corrupt byte ranges are dropped from `completed`
+// so the next run re-fetches just those, rather than re-downloading
+// the entire file. Returns nil when the manifest is nil or whenever
+// the file cannot even be opened (caller falls back to a clear).
+func (m *Manifest) BadChunks(path string) []ChunkHash {
+	if m == nil {
+		return nil
+	}
+	m.buildIndex()
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+	const bufSize = 256 * 1024
+	buf := make([]byte, bufSize)
+	var bad []ChunkHash
+	for _, c := range m.Chunks {
+		size := c.End - c.Start + 1
+		if _, err := f.Seek(c.Start, io.SeekStart); err != nil {
+			// A seek/read error against one chunk: be conservative and
+			// report it as bad so the resume sidecar drops it.
+			bad = append(bad, c)
+			continue
+		}
+		h := newHash(m.Algo)
+		remaining := size
+		readErr := false
+		for remaining > 0 {
+			n := int64(bufSize)
+			if n > remaining {
+				n = remaining
+			}
+			if _, err := io.ReadFull(f, buf[:n]); err != nil {
+				bad = append(bad, c)
+				readErr = true
+				break
+			}
+			h.Write(buf[:n])
+			remaining -= n
+		}
+		if readErr {
+			continue
+		}
+		got := hex.EncodeToString(h.Sum(nil))
+		if !hexEqual(got, c.Hash) {
+			bad = append(bad, c)
+		}
+	}
+	return bad
+}
+
 func verifyHash(data []byte, algo, expected string) error {
 	h := newHash(algo)
 	h.Write(data)
@@ -148,10 +229,29 @@ func verifyHash(data []byte, algo, expected string) error {
 	return nil
 }
 
-// buildIndex builds the O(1) lookup map for chunks.
-// Called eagerly from LoadManifest and lazily from VerifyChunk via sync.Once.
+// buildIndex builds the O(1) lookup map for chunks and (once) sorts
+// the Chunks slice by Start so VerifyRange can binary-search. Called
+// eagerly from LoadManifest and lazily from VerifyChunk via sync.Once.
 func (m *Manifest) buildIndex() {
 	m.once.Do(func() {
+		// Sort by Start (stable) so VerifyRange's binary search is valid.
+		// VerifyFull is order-independent (it seeks per chunk), so the
+		// reorder is safe for it too. Manifests that happen to be pre-
+		// sorted pay only a single O(n) check.
+		sortBefore := false
+		for i := 1; i < len(m.Chunks); i++ {
+			if m.Chunks[i].Start < m.Chunks[i-1].Start {
+				sortBefore = true
+				break
+			}
+		}
+		if sortBefore {
+			// In-place stable sort by Start; preserves relative order of
+			// equal-Start chunks (which the index dedups by End anyway).
+			sort.SliceStable(m.Chunks, func(i, j int) bool {
+				return m.Chunks[i].Start < m.Chunks[j].Start
+			})
+		}
 		m.index = make(map[int64]map[int64]string, len(m.Chunks))
 		for _, c := range m.Chunks {
 			if m.index[c.Start] == nil {

@@ -19,8 +19,14 @@ func humanBytes(n int64) string {
 		return formatFixed1(float64(n)/k) + " KB"
 	case n < k*k*k:
 		return formatFixed1(float64(n)/k/k) + " MB"
-	default:
+	case n < k*k*k*k:
 		return formatFixed2(float64(n)/k/k/k) + " GB"
+	case n < k*k*k*k*k:
+		// TiB arm — gofetch targets large mirrors (1 TiB+ downloads per
+		// range.go:73); without this arm a 1 TiB file reported as 1099.51 GB.
+		return formatFixed2(float64(n)/k/k/k/k) + " TB"
+	default:
+		return formatFixed2(float64(n)/k/k/k/k/k) + " PB"
 	}
 }
 

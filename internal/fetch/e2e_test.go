@@ -1,12 +1,14 @@
 package fetch
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -412,5 +414,81 @@ func TestShortRangeBodyErrors(t *testing.T) {
 	err := d.Download(ctx)
 	if err == nil {
 		t.Fatal("expected short-body error, got success")
+	}
+}
+
+// TestMidRangeEOFRetriesRecovery pins the G6 fix: a server that closes
+// the connection mid-range on the first attempt (the canonical transient
+// network failure — TCP close after a partial transfer) must have its
+// range requeued and retried. When the second attempt serves the full
+// range, the download recovers and the output matches bit-for-bit.
+// Before the fix, the mid-range EOF was wrapped so that isTransient()
+// returned false and the whole download fatally aborted.
+func TestMidRangeEOFRetriesRecovery(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+
+	// rangeKey tracks how many body-served requests have been issued for
+	// a given range so we can truncate only the first attempt.
+	var attemptsMu sync.Mutex
+	attempts := map[string]int{}
+	firstHalf := func(start, end int64) int64 { return end - (end-start+1)/2 + 1 }
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var start, end int64
+		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end); err != nil {
+			http.Error(w, "bad range", http.StatusBadRequest)
+			return
+		}
+		if end >= int64(len(payload)) {
+			end = int64(len(payload)) - 1
+		}
+		key := fmt.Sprintf("%d-%d", start, end)
+		attemptsMu.Lock()
+		attempts[key]++
+		n := attempts[key]
+		attemptsMu.Unlock()
+
+		// Every range is truncated on its FIRST attempt: the headers
+		// promise the full range (so the Content-Range check passes) but
+		// we write only the first half and then close the connection —
+		// exactly a CDN closing mid-stream. The second attempt serves
+		// the full range. Truncating every attempt (TestShortRangeBodyErrors)
+		// only exercises the retry-budget exhaustion path.
+		if n == 1 {
+			cut := firstHalf(start, end)
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[start : cut+1])
+			return
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(payload[start : end+1])
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+	opt := Options{NoResume: true, Quiet: true, HashAlgo: "sha256", ExpectedHash: sha256Hex(payload)}
+	d := NewDownloader(srv.URL, outFile, opt)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.Download(ctx); err != nil {
+		t.Fatalf("expected recovery after mid-range EOF retry, got error: %v", err)
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("output mismatch after truncated-then-full retry: got %d bytes, want %d", len(got), len(payload))
 	}
 }
