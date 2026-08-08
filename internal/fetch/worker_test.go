@@ -288,3 +288,85 @@ func TestReadBodyMidRangeEOFIsTransient(t *testing.T) {
 		t.Fatalf("isTransient must classify mid-range EOF as retryable; got false for %v", err)
 	}
 }
+
+
+// TestRecordWrittenPrefixOnRequeue pins G-F4: when steal/retry leaves a
+// partial written prefix, that span is committed to the resume accumulator
+// before the remainder is requeued, so a crash+resume does not re-fetch it.
+func TestRecordWrittenPrefixOnRequeue(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.bin")
+	d := &Downloader{
+		resumePath: resumePath(out),
+		// Zero RetryBase/Cap → Backoff is ~0 so requeue is immediate.
+		autoConfig: AutoConfig{RetryMax: 10},
+	}
+	ws := newWorkerState()
+	task := Task{Start: 1000, End: 9999}
+	ws.reset(task)
+	const written int64 = 500
+	ws.bytesDone.Store(written)
+
+	q := NewQueue(1, 0)
+	ctx := context.Background()
+	d.requeueUnfinished(ctx, ws, task, q)
+
+	// Written prefix must be in completed.
+	got := d.snapshotCompleted()
+	wantPrefix := Task{Start: 1000, End: 1000 + written - 1}
+	if len(got) != 1 || got[0] != wantPrefix {
+		t.Fatalf("completed = %v, want [%v]", got, wantPrefix)
+	}
+
+	// Remainder only must be requeued.
+	rem, ok := q.Pop()
+	if !ok {
+		t.Fatal("expected remainder on queue")
+	}
+	wantRem := Task{Start: 1000 + written, End: 9999}
+	if rem != wantRem {
+		t.Fatalf("remainder = %v, want %v", rem, wantRem)
+	}
+	if _, ok := q.Pop(); ok {
+		t.Fatal("queue should have only the remainder")
+	}
+}
+
+// TestRecordWrittenPrefixOnStealSkip covers the stealFlag path: monitor
+// already pushed the leftover, so the worker skips requeueUnfinished but
+// must still commit its written prefix for resume.
+func TestRecordWrittenPrefixOnStealSkip(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.bin")
+	d := &Downloader{resumePath: resumePath(out)}
+	ws := newWorkerState()
+	task := Task{Start: 0, End: 1 << 20}
+	ws.reset(task)
+	const written int64 = 777
+	ws.bytesDone.Store(written)
+	ws.stealFlag.Store(true)
+
+	// Mirror the cancel-branch contract in workerLoop.
+	if !ws.stealFlag.Swap(false) {
+		t.Fatal("stealFlag should have been set")
+	}
+	d.recordWrittenPrefix(ws, task)
+
+	got := d.snapshotCompleted()
+	want := Task{Start: 0, End: written - 1}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("completed = %v, want [%v]", got, want)
+	}
+}
+
+// TestRecordWrittenPrefixNoProgress is a no-op when nothing was written.
+func TestRecordWrittenPrefixNoProgress(t *testing.T) {
+	d := &Downloader{resumePath: "/tmp/unused.gofetch.resume"}
+	ws := newWorkerState()
+	task := Task{Start: 0, End: 100}
+	ws.reset(task)
+	d.recordWrittenPrefix(ws, task)
+	if got := d.snapshotCompleted(); len(got) != 0 {
+		t.Fatalf("expected empty completed, got %v", got)
+	}
+}

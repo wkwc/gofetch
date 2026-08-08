@@ -133,22 +133,24 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 		err := d.runTask(ctx, ws, task, f)
 		switch {
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+			// Steal/retry may leave a durable written prefix; commit it
+			// before skipping/requeueing so resume does not re-fetch it.
 			if ws.stealFlag.Swap(false) {
+				d.recordWrittenPrefix(ws, task)
 				continue
 			}
 			d.requeueUnfinished(ctx, ws, task, queue)
 		case err != nil:
 			if isTransient(err) {
 				// The transient branch must honor the same stealFlag guard
-				// the ctx-cancel branch at line 130 uses, otherwise a
-				// cancelled read that surfaces as io.ErrUnexpectedEOF or
-				// errBodyIdle (rather than context.Canceled) after the
-				// monitor already pushed leftover+cancel results in two
-				// pushers of overlapping ranges onto the queue. The
-				// monitor's comment at monitor.go:42-46 explicitly states
-				// stealFlag exists to make this requeue skip; the original
-				// transient path missed that contract.
+				// the ctx-cancel branch uses, otherwise a cancelled read
+				// that surfaces as io.ErrUnexpectedEOF or errBodyIdle
+				// (rather than context.Canceled) after the monitor already
+				// pushed leftover+cancel results in two pushers of
+				// overlapping ranges onto the queue. stealFlag exists to
+				// make this requeue skip (see monitor.go).
 				if ws.stealFlag.Swap(false) {
+					d.recordWrittenPrefix(ws, task)
 					continue
 				}
 				d.vlog("task %d-%d transient error: %v", task.Start, task.End, err)
@@ -177,7 +179,29 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 	}
 }
 
+// recordWrittenPrefix commits the durable byte span already written for
+// task into the resume accumulator. Called when steal or retry abandons
+// the remainder of a task so a later resume does not re-fetch those bytes.
+// No-op when resume is disabled or nothing has been written yet.
+func (d *Downloader) recordWrittenPrefix(ws *workerState, task Task) {
+	done := ws.bytesDone.Load()
+	if done <= 0 {
+		return
+	}
+	end := task.Start + done - 1
+	if end > task.End {
+		end = task.End
+	}
+	if end < task.Start {
+		return
+	}
+	d.recordCompleted(Task{Start: task.Start, End: end})
+}
+
 func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, task Task, queue *Queue) {
+	// Commit the written prefix first so crash/resume skips it even if
+	// the remainder never makes it back onto the queue.
+	d.recordWrittenPrefix(ws, task)
 	remaining := Task{Start: task.Start + ws.bytesDone.Load(), End: task.End}
 	if remaining.Start > remaining.End {
 		return

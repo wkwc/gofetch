@@ -110,7 +110,7 @@ but "parallel curl."
 - **Transient network errors** (connection reset, unexpected EOF, timeout) are retried with exponential backoff (up to 10 retries per chunk).
 - **HTTP 429/503/502/504/408** are retried respecting `Retry-After` header.
 - **Permanent errors** (invalid URL, unsupported status codes) fail immediately.
-- **HTTP 416** (Range Not Satisfiable) is treated as "already complete" and skipped.
+- **HTTP 416** (Range Not Satisfiable) is a hard error for the range (not treated as complete); the worker fails that task rather than marking unwritten bytes done.
 
 ## Integrity Verification
 
