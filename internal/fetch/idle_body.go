@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"sync"
 	"time"
 )
@@ -15,41 +16,99 @@ const defaultBodyIdle = 60 * time.Second
 // errBodyIdle is treated as transient by isTransient so workers retry.
 var errBodyIdle = errors.New("body idle timeout: no data received")
 
-// idleBody wraps an io.Reader with a per-read idle deadline. Each
-// successful Read resets the timer. If no data arrives within idle,
-// Read returns a transient error so the worker can requeue.
+// connDeadliner is implemented by net.Conn (and some transport bodies).
+type connDeadliner interface {
+	SetReadDeadline(t time.Time) error
+}
+
+// idleBody wraps an io.Reader with a per-read idle deadline.
 //
-// On idle/context cancel we Close the underlying reader once so the
-// helper Read goroutine unblocks (HTTP body reads return on close),
-// then wait briefly for that goroutine so the next Read/Close does
-// not race concurrent body reads.
-//
-// Reads go into a private buffer so a timed-out goroutine cannot
-// race with the caller's reuse of p.
+// Prefer SetReadDeadline on an underlying net.Conn when available — that
+// path has no per-Read goroutine. Fall back to a single long-lived helper
+// goroutine + buffer for bodies that do not expose a deadline (most
+// http.Response.Body types still do via the transport connection when
+// unwrapped; see tryConnDeadline).
 type idleBody struct {
 	r         io.Reader
 	ctx       context.Context
 	idle      time.Duration
-	timer     *time.Timer
 	closeOnce sync.Once
 	closeErr  error
-	// mu serializes Read/Close so only one in-flight underlying Read.
-	mu sync.Mutex
+
+	// deadline path
+	conn connDeadliner
+
+	// goroutine path (fallback)
+	mu    sync.Mutex
+	timer *time.Timer
+	useGo bool
+	// long-lived reader
+	started bool
+	readCh  chan readResult
+	reqCh   chan readReq
+	stopCh  chan struct{}
+}
+
+type readReq struct {
+	buf []byte
+	res chan readResult
+}
+
+type readResult struct {
+	n   int
+	err error
+	buf []byte
+}
+
+func tryConnDeadline(r io.Reader) connDeadliner {
+	// Common unwrap patterns for net/http bodies.
+	type unwrapper interface{ Unwrap() io.Reader }
+	seen := map[io.Reader]struct{}{}
+	cur := r
+	for i := 0; i < 8 && cur != nil; i++ {
+		if _, ok := seen[cur]; ok {
+			break
+		}
+		seen[cur] = struct{}{}
+		if c, ok := cur.(connDeadliner); ok {
+			return c
+		}
+		if c, ok := cur.(net.Conn); ok {
+			return c
+		}
+		if u, ok := cur.(unwrapper); ok {
+			cur = u.Unwrap()
+			continue
+		}
+		// *io.LimitedReader
+		if lr, ok := cur.(*io.LimitedReader); ok {
+			cur = lr.R
+			continue
+		}
+		break
+	}
+	return nil
 }
 
 func newIdleBody(ctx context.Context, r io.Reader, idle time.Duration) *idleBody {
 	if idle <= 0 {
 		idle = defaultBodyIdle
 	}
-	t := time.NewTimer(idle)
-	if !t.Stop() {
-		select {
-		case <-t.C:
-		default:
+	b := &idleBody{r: r, ctx: ctx, idle: idle, conn: tryConnDeadline(r)}
+	if b.conn == nil {
+		b.useGo = true
+		b.timer = time.NewTimer(idle)
+		if !b.timer.Stop() {
+			select {
+			case <-b.timer.C:
+			default:
+			}
 		}
+		b.timer.Reset(idle)
+		b.reqCh = make(chan readReq, 1)
+		b.stopCh = make(chan struct{})
 	}
-	t.Reset(idle)
-	return &idleBody{r: r, ctx: ctx, idle: idle, timer: t}
+	return b
 }
 
 func (b *idleBody) forceClose() {
@@ -57,59 +116,107 @@ func (b *idleBody) forceClose() {
 		if c, ok := b.r.(io.Closer); ok {
 			b.closeErr = c.Close()
 		}
+		if b.useGo && b.stopCh != nil {
+			select {
+			case <-b.stopCh:
+			default:
+				close(b.stopCh)
+			}
+		}
 	})
 }
 
+func (b *idleBody) startHelper() {
+	if b.started {
+		return
+	}
+	b.started = true
+	go func() {
+		for {
+			select {
+			case <-b.stopCh:
+				return
+			case <-b.ctx.Done():
+				return
+			case req, ok := <-b.reqCh:
+				if !ok {
+					return
+				}
+				n, err := b.r.Read(req.buf)
+				req.res <- readResult{n: n, err: err, buf: req.buf}
+			}
+		}
+	}()
+}
+
 func (b *idleBody) Read(p []byte) (int, error) {
+	if !b.useGo {
+		// Deadline path: no goroutine.
+		if err := b.ctx.Err(); err != nil {
+			return 0, err
+		}
+		_ = b.conn.SetReadDeadline(time.Now().Add(b.idle))
+		n, err := b.r.Read(p)
+		// Clear deadline so Close / later ops are not cut short.
+		_ = b.conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				b.forceClose()
+				return 0, errBodyIdle
+			}
+			if b.ctx.Err() != nil {
+				return 0, b.ctx.Err()
+			}
+		}
+		return n, err
+	}
+
+	// Fallback: one long-lived reader goroutine (not per-Read).
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.startHelper()
 
-	type result struct {
-		n   int
-		err error
-		buf []byte
-	}
-	// Private buffer avoids data race if we time out while the
-	// underlying Read is still running. Pool for typical sizes; on the
-	// rare abandon path (helper still blocked after forceClose wait)
-	// that one buffer is intentionally not returned to the pool.
 	tmp := acquireBuf(len(p))
-	ch := make(chan result, 1)
-	go func() {
-		n, err := b.r.Read(tmp)
-		ch <- result{n: n, err: err, buf: tmp}
-	}()
+	resCh := make(chan readResult, 1)
+	select {
+	case <-b.ctx.Done():
+		releaseBuf(tmp)
+		b.forceClose()
+		return 0, b.ctx.Err()
+	case b.reqCh <- readReq{buf: tmp, res: resCh}:
+	case <-b.stopCh:
+		releaseBuf(tmp)
+		return 0, io.ErrClosedPipe
+	}
+
+	if !b.timer.Stop() {
+		select {
+		case <-b.timer.C:
+		default:
+		}
+	}
+	b.timer.Reset(b.idle)
+
 	select {
 	case <-b.ctx.Done():
 		b.forceClose()
-		// Drain the helper so the next Read does not race.
 		select {
-		case res := <-ch:
+		case res := <-resCh:
 			releaseBuf(res.buf)
 		case <-time.After(2 * time.Second):
-			// Abandon: helper still owns tmp.
 		}
 		return 0, b.ctx.Err()
 	case <-b.timer.C:
-		// Unblock the in-flight Read by closing the body, then wait.
 		b.forceClose()
 		select {
-		case res := <-ch:
+		case res := <-resCh:
 			releaseBuf(res.buf)
 		case <-time.After(2 * time.Second):
-			// Abandon: helper still owns tmp.
 		}
 		return 0, errBodyIdle
-	case res := <-ch:
+	case res := <-resCh:
 		if res.n > 0 {
 			copy(p, res.buf[:res.n])
-			if !b.timer.Stop() {
-				select {
-				case <-b.timer.C:
-				default:
-				}
-			}
-			b.timer.Reset(b.idle)
 		}
 		releaseBuf(res.buf)
 		return res.n, res.err
@@ -117,11 +224,13 @@ func (b *idleBody) Read(p []byte) (int, error) {
 }
 
 func (b *idleBody) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	if b.useGo {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
+	b.forceClose()
 	if b.timer != nil {
 		b.timer.Stop()
 	}
-	b.forceClose()
 	return b.closeErr
 }
