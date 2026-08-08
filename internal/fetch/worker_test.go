@@ -289,7 +289,6 @@ func TestReadBodyMidRangeEOFIsTransient(t *testing.T) {
 	}
 }
 
-
 // TestRecordWrittenPrefixOnRequeue pins G-F4: when steal/retry leaves a
 // partial written prefix, that span is committed to the resume accumulator
 // before the remainder is requeued, so a crash+resume does not re-fetch it.
