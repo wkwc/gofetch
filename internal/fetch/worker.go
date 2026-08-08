@@ -16,6 +16,12 @@ import (
 
 const maxHTTPStatusRetries = 10
 
+// errRangeNotSupported is returned when a Range GET receives a non-partial
+// response (typically HTTP 200 OK) despite the server advertising
+// Accept-Ranges. Callers fall back to single-stream rather than treating
+// the failure as fatal. Partial range writes must not be marked complete.
+var errRangeNotSupported = errors.New("server does not honor Range requests")
+
 // workerState is the live state of one worker goroutine.
 // All fields are atomic for lock-free reads from the monitor.
 type workerState struct {
@@ -259,8 +265,11 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 
 		switch resp.StatusCode {
 		case http.StatusOK:
+			// Accept-Ranges was advertised (or probe thought so) but the
+			// Range GET returned the full object. Do not write or complete
+			// this partial task — downloadFromMirror falls back to single.
 			drainAndClose(resp.Body)
-			return fmt.Errorf("range %d-%d: server returned 200 OK (does not support range requests)", task.Start, task.End)
+			return errRangeNotSupported
 		case http.StatusRequestedRangeNotSatisfiable:
 			drainAndClose(resp.Body)
 			// Never treat 416 as success: that would recordCompleted an

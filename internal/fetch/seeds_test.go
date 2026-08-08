@@ -156,14 +156,24 @@ func TestSplitRangeProperties(t *testing.T) {
 			t.Errorf("iter %d: last task End=%d, want %d", i, prevEnd, offset+length-1)
 		}
 
-		// Property 3: Each task size <= chunkSize (except possibly last)
-		for j, task := range tasks {
-			size := task.Len()
-			if j < len(tasks)-1 && size != chunkSize {
-				t.Errorf("iter %d: task %d size=%d, want %d (not last)", i, j, size, chunkSize)
-			}
-			if size > chunkSize {
-				t.Errorf("iter %d: task %d size=%d exceeds chunkSize=%d", i, j, size, chunkSize)
+		// Property 3: task count is always bounded; when no auto-growth
+		// was needed, non-final tasks equal chunkSize and none exceed it.
+		if len(tasks) > maxSeedTasks {
+			t.Errorf("iter %d: task count %d exceeds maxSeedTasks %d", i, len(tasks), maxSeedTasks)
+		}
+		wantN := length / chunkSize
+		if length%chunkSize != 0 {
+			wantN++
+		}
+		if wantN <= maxSeedTasks {
+			for j, task := range tasks {
+				size := task.Len()
+				if j < len(tasks)-1 && size != chunkSize {
+					t.Errorf("iter %d: task %d size=%d, want %d (not last)", i, j, size, chunkSize)
+				}
+				if size > chunkSize {
+					t.Errorf("iter %d: task %d size=%d exceeds chunkSize=%d", i, j, size, chunkSize)
+				}
 			}
 		}
 	}
@@ -253,5 +263,78 @@ func TestUncompletedProperties(t *testing.T) {
 		if allCovered && len(uncomp) != 0 {
 			t.Errorf("iter %d: full covered but uncomp not empty: %v", i, uncomp)
 		}
+	}
+}
+
+func TestSeedChunkSize(t *testing.T) {
+	if got := seedChunkSize(0); got != minSeedChunk {
+		t.Errorf("seedChunkSize(0) = %d, want %d", got, minSeedChunk)
+	}
+	if got := seedChunkSize(minSeedChunk * 10); got != minSeedChunk {
+		t.Errorf("small total chunk = %d, want %d", got, minSeedChunk)
+	}
+	// total that needs > maxSeedTasks at 1 MiB → chunk must grow
+	huge := int64(maxSeedTasks)*minSeedChunk*4 + 1
+	got := seedChunkSize(huge)
+	if got < minSeedChunk {
+		t.Errorf("chunk %d < minSeedChunk", got)
+	}
+	n := huge / got
+	if huge%got != 0 {
+		n++
+	}
+	if n > maxSeedTasks {
+		t.Errorf("ceil(huge/chunk)=%d exceeds maxSeedTasks=%d (chunk=%d)", n, maxSeedTasks, got)
+	}
+}
+
+// TestSplitRangeBoundsHugeTotal proves a hostile Content-Length-scale
+// total cannot materialize unbounded Task slices (the old saneChunkCount
+// only capped make capacity; the append loop still grew without bound).
+func TestSplitRangeBoundsHugeTotal(t *testing.T) {
+	// 1 PiB at 1 MiB/chunk would be ~1e9 tasks; must stay ≤ maxSeedTasks.
+	const total int64 = 1 << 50 // 1 PiB
+	tasks := splitRange(0, total, minSeedChunk)
+	if len(tasks) == 0 {
+		t.Fatal("expected some tasks")
+	}
+	if len(tasks) > maxSeedTasks {
+		t.Fatalf("task count %d exceeds maxSeedTasks %d", len(tasks), maxSeedTasks)
+	}
+	if tasks[0].Start != 0 {
+		t.Errorf("first Start = %d, want 0", tasks[0].Start)
+	}
+	if tasks[len(tasks)-1].End != total-1 {
+		t.Errorf("last End = %d, want %d", tasks[len(tasks)-1].End, total-1)
+	}
+	// Full coverage, no gaps/overlaps.
+	for i := 1; i < len(tasks); i++ {
+		if tasks[i].Start != tasks[i-1].End+1 {
+			t.Fatalf("gap/overlap at %d: prev End=%d, Start=%d", i, tasks[i-1].End, tasks[i].Start)
+		}
+		if tasks[i].Start > tasks[i].End {
+			t.Fatalf("inverted task %d: %v", i, tasks[i])
+		}
+	}
+}
+
+// TestSplitRangeNearMaxInt64 ensures near-MaxInt64 lengths do not panic
+// or allocate more than maxSeedTasks entries.
+func TestSplitRangeNearMaxInt64(t *testing.T) {
+	const maxInt64 = int64(^uint64(0) >> 1)
+	// Use a large but safe length that previously only capped capacity.
+	length := maxInt64 - (1 << 30)
+	tasks := splitRange(0, length, minSeedChunk)
+	if len(tasks) > maxSeedTasks {
+		t.Fatalf("task count %d exceeds max %d", len(tasks), maxSeedTasks)
+	}
+	if len(tasks) == 0 {
+		t.Fatal("expected some tasks")
+	}
+	if tasks[0].Start != 0 {
+		t.Errorf("first Start = %d", tasks[0].Start)
+	}
+	if tasks[len(tasks)-1].End != length-1 {
+		t.Errorf("last End = %d, want %d", tasks[len(tasks)-1].End, length-1)
 	}
 }

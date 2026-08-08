@@ -2,8 +2,6 @@ package fetch
 
 import (
 	"context"
-	"errors"
-	"io/fs"
 	"sync"
 	"time"
 )
@@ -48,46 +46,21 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	prog := newProgress(total, states)
 	seedResumeBytes(prog, completed)
 
-	// Try to load manifest. ErrNotExist is the common "no manifest
-	// present" case; any other error (corrupt JSON, unknown version,
-	// truncated write) means a user-supplied manifest that we can no
-	// longer verify against, so log it loudly enough to surface the
-	// silent downgrade from "integrity-checked" to "unchecked".
-	manifestPath := d.outFile + ".gofetch.manifest"
-	if m, err := LoadManifest(manifestPath); err == nil {
-		d.manifest = m
-		d.vlog("loaded manifest with %d chunks", len(m.Chunks))
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		d.vlog("manifest load failed (skipping integrity check): %v", err)
+	// Adaptive chunk size: prefer 1 MiB, but grow so the seed task count
+	// stays ≤ maxSeedTasks even for multi-TiB / hostile Content-Length.
+	// splitRange also enforces the bound as defense in depth.
+	chunkSize := seedChunkSize(total)
+	// seedCap is only a make() hint; the actual count is produced by
+	// splitRange over uncompleted() gaps. Cap the hint the same way so
+	// a hostile total cannot panic makeslice.
+	seedCap := total / chunkSize
+	if total%chunkSize != 0 {
+		seedCap++
 	}
-
-	const chunkSize = 1 << 20 // 1 MiB
-	// Bound the seed slice cap to avoid an int64 overflow panic in
-	// `make` for server-controlled Content-Length/Content-Range values
-	// near MaxInt64: (total + chunkSize - 1) overflows there, the divisor
-	// returns a negative or astronomically large value and the goruntime
-	// panics "makeslice: cap out of range". The cap is only a hint — the
-	// actual seed count is appended lazily by splitRange over
-	// uncompleted() gaps, so over-cap is harmless, under-cap just costs
-	// one re-grow. saneChunkCount (1<<20 = ~16 MiB of Task structs,
-	// covering 1 TiB at 1 MiB chunks) is well past any real-world file
-	// and keeps allocations bounded even for hostile Content-Range.
-	const saneChunkCount = int64(1) << 20
-	var seedCap int64
-	if total <= 0 {
+	if seedCap > maxSeedTasks {
+		seedCap = maxSeedTasks
+	} else if seedCap < 0 {
 		seedCap = 0
-	} else {
-		// Saturate: (total + chunkSize - 1) / chunkSize without overflow.
-		n := total / chunkSize
-		if rem := total % chunkSize; rem != 0 {
-			n++
-		}
-		if n > saneChunkCount {
-			n = saneChunkCount
-		} else if n < 0 {
-			n = 0
-		}
-		seedCap = n
 	}
 	seeds := make([]Task, 0, seedCap)
 	for _, gap := range uncompleted(Task{Start: 0, End: total - 1}, completed) {

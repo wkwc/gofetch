@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"sync"
@@ -268,8 +269,37 @@ func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, i
 	d.url = activeURL
 	defer func() { d.url = savedURL }()
 
+	// Load per-chunk integrity manifest for both range and single-stream
+	// paths (previously only rangeDownload loaded it).
+	d.loadManifestIfPresent()
+
 	if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
 		return d.singleDownload(ctx, info.total, completed, f)
 	}
-	return d.rangeDownload(ctx, info.total, completed, f)
+	err := d.rangeDownload(ctx, info.total, completed, f)
+	if errors.Is(err, errRangeNotSupported) {
+		// Probe advertised ranges but the first Range GET returned 200.
+		// Abort range mode and stream the whole object once. Do not treat
+		// any partial range progress as complete — singleDownload rewrites
+		// from byte 0 and ignores completed ranges.
+		d.vlog("Range request returned 200 OK; falling back to single-stream")
+		return d.singleDownload(ctx, info.total, completed, f)
+	}
+	return err
+}
+
+// loadManifestIfPresent tries to load <outFile>.gofetch.manifest.
+// ErrNotExist is the common "no manifest" case; any other error (corrupt
+// JSON, unknown version) is logged so integrity is not silently dropped.
+func (d *Downloader) loadManifestIfPresent() {
+	if d.manifest != nil {
+		return
+	}
+	manifestPath := d.outFile + ".gofetch.manifest"
+	if m, err := LoadManifest(manifestPath); err == nil {
+		d.manifest = m
+		d.vlog("loaded manifest with %d chunks", len(m.Chunks))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		d.vlog("manifest load failed (skipping integrity check): %v", err)
+	}
 }
