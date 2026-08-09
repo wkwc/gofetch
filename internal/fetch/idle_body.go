@@ -44,7 +44,6 @@ type idleBody struct {
 	useGo bool
 	// long-lived reader
 	started bool
-	readCh  chan readResult
 	reqCh   chan readReq
 	stopCh  chan struct{}
 }
