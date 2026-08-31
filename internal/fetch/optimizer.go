@@ -99,13 +99,15 @@ func (ac *AutoConfig) Retune(totalSize int64) {
 	ac.Workers = scaleWorkers(totalSize, runtime.NumCPU())
 }
 
-// tcpFastOpen and tcpNotSentLowat are not exported by the linux syscall
-// package as of Go 1.26. They are defined here so future kernels can
-// adopt them without losing our perf-tuning; on unsupported kernels
-// the syscall is silently a no-op via the SetsockoptInt return.
+// TCP_NOTSENT_LOWAT (0x19) is not exported by the linux syscall
+// package as of Go 1.26. The previous 0x17 was TCP_FASTOPEN on
+// every arch, so we were setting FASTOPEN twice and never touching
+// NOTSENT_LOWAT. Defined here so future kernels can adopt these
+// without losing our perf-tuning; on unsupported kernels the
+// syscall is silently a no-op via the SetsockoptInt return.
 const (
 	tcpFastOpen      = 23
-	tcpNotSentLowat  = 0x17
+	tcpNotSentLowat  = 25
 	tcpNotSentLowatV = 131072
 )
 
