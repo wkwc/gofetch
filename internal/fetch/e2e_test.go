@@ -233,7 +233,7 @@ func TestEndToEndNoResume(t *testing.T) {
 func TestProbeHeadUnsupported(t *testing.T) {
 	payload := makePayload(256 * 1024)
 	srv := newRangeServer(t, payload, &rangeServerConfig{
-		Head: func(w http.ResponseWriter, r *http.Request, payload []byte) {
+		Head: func(w http.ResponseWriter, _ *http.Request, _ []byte) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		},
 	})
@@ -257,7 +257,7 @@ func TestProbeHeadUnsupported(t *testing.T) {
 
 // TestProbeServerError verifies that a server returning 500 surfaces as an error.
 func TestProbeServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 	}))
 	t.Cleanup(srv.Close)
@@ -278,7 +278,7 @@ func TestProbeServerError(t *testing.T) {
 func TestProbeHeadNoContentLength(t *testing.T) {
 	payload := makePayload(64 * 1024)
 	srv := newRangeServer(t, payload, &rangeServerConfig{
-		Head: func(w http.ResponseWriter, r *http.Request, payload []byte) {
+		Head: func(w http.ResponseWriter, _ *http.Request, _ []byte) {
 			// Intentionally omit Content-Length so probe falls through.
 			w.Header().Set("Accept-Ranges", "bytes")
 			w.WriteHeader(http.StatusOK)
@@ -344,7 +344,7 @@ func TestShortRangeBodyErrors(t *testing.T) {
 	payload := makePayload(64 * 1024)
 	// Promise the full range but write only half, then close.
 	srv := newRangeServer(t, payload, &rangeServerConfig{
-		Write: func(w http.ResponseWriter, r *http.Request, payload []byte, start, end int64) {
+		Write: func(w http.ResponseWriter, _ *http.Request, payload []byte, _, _ int64) {
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(payload)-1, len(payload)))
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)/2))
 			w.WriteHeader(http.StatusPartialContent)
@@ -381,7 +381,7 @@ func TestMidRangeEOFRetriesRecovery(t *testing.T) {
 	firstHalf := func(start, end int64) int64 { return end - (end-start+1)/2 + 1 }
 
 	srv := newRangeServer(t, payload, &rangeServerConfig{
-		Write: func(w http.ResponseWriter, r *http.Request, payload []byte, start, end int64) {
+		Write: func(w http.ResponseWriter, _ *http.Request, payload []byte, start, end int64) {
 			key := fmt.Sprintf("%d-%d", start, end)
 			attemptsMu.Lock()
 			attempts[key]++
@@ -480,7 +480,7 @@ func TestRange200FallsBackToSingle(t *testing.T) {
 // Downloader so finalize reports the actual size.
 func TestUnknownSizeSingleStream(t *testing.T) {
 	payload := makePayload(300 * 1024)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		// No Content-Length → Go uses chunked encoding; probe falls back
 		// to a range GET which also omits size → single-stream.

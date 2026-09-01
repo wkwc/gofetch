@@ -15,7 +15,7 @@ type stallReader struct {
 	wait time.Duration
 }
 
-func (s *stallReader) Read(p []byte) (int, error) {
+func (s *stallReader) Read(_ []byte) (int, error) {
 	if s.n.Add(1) == 1 {
 		// First read stalls longer than the idle timeout.
 		time.Sleep(s.wait)

@@ -35,7 +35,7 @@ type rangeServerConfig struct {
 // The optional config customizes HEAD behavior and the per-range writer.
 func newRangeServer(t *testing.T, payload []byte, cfg *rangeServerConfig) *httptest.Server {
 	t.Helper()
-	head := func(w http.ResponseWriter, r *http.Request, payload []byte) {
+	head := func(w http.ResponseWriter, _ *http.Request, payload []byte) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
 		w.WriteHeader(http.StatusOK)
 	}

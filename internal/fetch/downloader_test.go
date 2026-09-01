@@ -112,11 +112,11 @@ func TestParseUint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got, err := parseUint(tt.s)
-		if tt.ok && err != nil {
-			t.Errorf("parseUint(%q) error: %v", tt.s, err)
-		} else if !tt.ok && err == nil {
-			t.Errorf("parseUint(%q) = %d, want error", tt.s, got)
-		} else if tt.ok && got != tt.want {
+		if (err != nil) != !tt.ok {
+			t.Errorf("parseUint(%q) error mismatch: got err=%v, want err=%v", tt.s, err, !tt.ok)
+			continue
+		}
+		if tt.ok && got != tt.want {
 			t.Errorf("parseUint(%q) = %d, want %d", tt.s, got, tt.want)
 		}
 	}

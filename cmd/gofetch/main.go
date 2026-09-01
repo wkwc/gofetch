@@ -229,7 +229,7 @@ func fetchSidecarURL(ctx context.Context, client *http.Client, sidecarURL string
 	if parsed.Scheme != "https" {
 		return "", "", fmt.Errorf("sidecar URL must use HTTPS")
 	}
-	if fetch.HostIsPrivate(parsed.Hostname()) {
+	if fetch.HostIsPrivateContext(ctx, parsed.Hostname()) {
 		return "", "", fmt.Errorf("sidecar URL host %q resolves to a private/internal address (SSRF guard)", parsed.Hostname())
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sidecarURL, nil)
@@ -242,7 +242,7 @@ func fetchSidecarURL(ctx context.Context, client *http.Client, sidecarURL string
 		return "", "", fmt.Errorf("request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("sidecar HTTP %d", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1024))

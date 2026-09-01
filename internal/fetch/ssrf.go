@@ -23,12 +23,22 @@ var AllowLoopbackDial bool
 // link-local, multicast, or unspecified IP. DNS failure → true (fail closed).
 // Loopback is treated as private unless AllowLoopbackDial is set (tests).
 func HostIsPrivate(hostname string) bool {
-	ips, err := net.LookupIP(hostname)
+	return hostIsPrivate(context.Background(), hostname)
+}
+
+// HostIsPrivateContext is HostIsPrivate with a caller-provided context so
+// DNS lookups honor deadlines and cancellation (used during redirects).
+func HostIsPrivateContext(ctx context.Context, hostname string) bool {
+	return hostIsPrivate(ctx, hostname)
+}
+
+func hostIsPrivate(ctx context.Context, hostname string) bool {
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, hostname)
 	if err != nil {
 		return true
 	}
-	for _, ip := range ips {
-		if ipIsBlocked(ip) {
+	for _, ipa := range ips {
+		if ipIsBlocked(ipa.IP) {
 			return true
 		}
 	}
@@ -60,7 +70,7 @@ func CheckRedirectSafe(req *http.Request, via []*http.Request) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("redirect to unsupported scheme %q", u.Scheme)
 	}
-	if HostIsPrivate(u.Hostname()) {
+	if HostIsPrivateContext(req.Context(), u.Hostname()) {
 		return fmt.Errorf("redirect to private/internal host %q blocked", u.Hostname())
 	}
 	return nil
@@ -73,7 +83,7 @@ func CheckRedirectSafe(req *http.Request, via []*http.Request) error {
 // + aggressive keepalive, while non-Linux platforms no-op.
 func tunedDialer() *net.Dialer {
 	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 10 * time.Second}
-	d.Control = func(network, address string, c syscall.RawConn) error {
+	d.Control = func(_, _ string, c syscall.RawConn) error {
 		return c.Control(func(fd uintptr) {
 			tuneFD(fd)
 		})
