@@ -23,29 +23,26 @@ func makePayload(n int) []byte {
 	return b
 }
 
+// rangeServerConfig customizes newRangeServer. A nil Head uses the default
+// (200 OK with Content-Length). Write lets tests override the per-range body
+// (e.g. truncate mid-range); the default streams the full requested span.
+type rangeServerConfig struct {
+	Head  func(w http.ResponseWriter, r *http.Request, payload []byte)
+	Write func(w http.ResponseWriter, r *http.Request, payload []byte, start, end int64)
+}
+
 // newRangeServer serves fixed payload bytes, honoring Range requests.
-func newRangeServer(t *testing.T, payload []byte) *httptest.Server {
+// The optional config customizes HEAD behavior and the per-range writer.
+func newRangeServer(t *testing.T, payload []byte, cfg *rangeServerConfig) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Accept-Ranges", "bytes")
-		w.Header().Set("Content-Type", "application/octet-stream")
-		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		rangeHeader := r.Header.Get("Range")
-		if rangeHeader == "" {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(payload)
-			return
-		}
-		start, end, ok := parseRangeHeader(rangeHeader, len(payload))
-		if !ok {
-			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
-			return
-		}
+	head := func(w http.ResponseWriter, r *http.Request, payload []byte) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.WriteHeader(http.StatusOK)
+	}
+	if cfg != nil && cfg.Head != nil {
+		head = cfg.Head
+	}
+	write := func(w http.ResponseWriter, r *http.Request, payload []byte, start, end int64) {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
 		w.WriteHeader(http.StatusPartialContent)
@@ -60,6 +57,31 @@ func newRangeServer(t *testing.T, payload []byte) *httptest.Server {
 				return
 			}
 		}
+	}
+	if cfg != nil && cfg.Write != nil {
+		write = cfg.Write
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if r.Method == http.MethodHead {
+			head(w, r, payload)
+			return
+		}
+		rangeHeader := r.Header.Get("Range")
+		if rangeHeader == "" {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+			return
+		}
+		start, end, ok := parseRangeHeader(rangeHeader, len(payload))
+		if !ok {
+			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		write(w, r, payload, start, end)
 	}))
 	t.Cleanup(srv.Close)
 	return srv

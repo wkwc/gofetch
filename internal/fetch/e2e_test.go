@@ -18,7 +18,7 @@ import (
 // range-supported server. The output must match the server's payload bit-for-bit.
 func TestEndToEndDownload(t *testing.T) {
 	payload := makePayload(2 * 1024 * 1024)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -49,7 +49,7 @@ func TestEndToEndDownload(t *testing.T) {
 // must match the source — no torn writes, no off-by-one.
 func TestEndToEndConcurrentWorkersCleanFile(t *testing.T) {
 	payload := makePayload(4 * 1024 * 1024)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -77,7 +77,7 @@ func TestEndToEndConcurrentWorkersCleanFile(t *testing.T) {
 func TestEndToEndWithHashVerify(t *testing.T) {
 	payload := makePayload(1 * 1024 * 1024)
 	expected := sha256Hex(payload)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -99,7 +99,7 @@ func TestEndToEndWithHashVerify(t *testing.T) {
 // SHA-256 hex is supplied; the Download() must surface an error.
 func TestEndToEndWithBadHash(t *testing.T) {
 	payload := makePayload(1 * 1024 * 1024)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -123,7 +123,7 @@ func TestEndToEndWithBadHash(t *testing.T) {
 func TestEndToEndWithSHA512Verify(t *testing.T) {
 	payload := makePayload(512 * 1024)
 	expected := sha512Hex(payload)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -165,7 +165,7 @@ func TestSidecarHashParsing(t *testing.T) {
 // mid-way by cancelling the context, then restarts.
 func TestEndToEndResume(t *testing.T) {
 	payload := makePayload(8 * 1024 * 1024)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -197,7 +197,7 @@ func TestEndToEndResume(t *testing.T) {
 // TestEndToEndNoResume verifies --no-resume downloads fresh.
 func TestEndToEndNoResume(t *testing.T) {
 	payload := makePayload(4 * 1024 * 1024)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -232,30 +232,11 @@ func TestEndToEndNoResume(t *testing.T) {
 // the probe correctly falls back to a 1-byte range GET to detect range support.
 func TestProbeHeadUnsupported(t *testing.T) {
 	payload := makePayload(256 * 1024)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		if r.Method == http.MethodHead {
+	srv := newRangeServer(t, payload, &rangeServerConfig{
+		Head: func(w http.ResponseWriter, r *http.Request, payload []byte) {
 			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		rangeHeader := r.Header.Get("Range")
-		if rangeHeader == "" {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(payload)
-			return
-		}
-		start, end, ok := parseRangeHeader(rangeHeader, len(payload))
-		if !ok {
-			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
-			return
-		}
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = w.Write(payload[start : end+1])
-	}))
-	t.Cleanup(srv.Close)
+		},
+	})
 
 	d := NewDownloader(srv.URL, "test.bin", Options{})
 
@@ -296,32 +277,13 @@ func TestProbeServerError(t *testing.T) {
 // HEAD 200 omits Content-Length (historical bug: ok=true short-circuited).
 func TestProbeHeadNoContentLength(t *testing.T) {
 	payload := makePayload(64 * 1024)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/octet-stream")
-		if r.Method == http.MethodHead {
-			// Intentionally omit Content-Length.
+	srv := newRangeServer(t, payload, &rangeServerConfig{
+		Head: func(w http.ResponseWriter, r *http.Request, payload []byte) {
+			// Intentionally omit Content-Length so probe falls through.
 			w.Header().Set("Accept-Ranges", "bytes")
 			w.WriteHeader(http.StatusOK)
-			return
-		}
-		rangeHeader := r.Header.Get("Range")
-		if rangeHeader == "" {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(payload)
-			return
-		}
-		start, end, ok := parseRangeHeader(rangeHeader, len(payload))
-		if !ok {
-			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
-			return
-		}
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = w.Write(payload[start : end+1])
-	}))
-	t.Cleanup(srv.Close)
+		},
+	})
 
 	d := NewDownloader(srv.URL, "test.bin", Options{})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -342,7 +304,7 @@ func TestProbeHeadNoContentLength(t *testing.T) {
 // TestQuietModeStillVerifiesHash ensures -q never skips integrity checks.
 func TestQuietModeStillVerifiesHash(t *testing.T) {
 	payload := makePayload(256 * 1024)
-	srv := newRangeServer(t, payload)
+	srv := newRangeServer(t, payload, nil)
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
 
@@ -380,21 +342,15 @@ func TestQuietModeStillVerifiesHash(t *testing.T) {
 // TestShortRangeBodyErrors ensures a truncated 206 is not treated as success.
 func TestShortRangeBodyErrors(t *testing.T) {
 	payload := makePayload(64 * 1024)
-	// Serve only the first half of any range request, then close.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.Header().Set("Accept-Ranges", "bytes")
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		w.Header().Set("Accept-Ranges", "bytes")
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(payload)-1, len(payload)))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)/2))
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = w.Write(payload[:len(payload)/2])
-	}))
-	t.Cleanup(srv.Close)
+	// Promise the full range but write only half, then close.
+	srv := newRangeServer(t, payload, &rangeServerConfig{
+		Write: func(w http.ResponseWriter, r *http.Request, payload []byte, start, end int64) {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(payload)-1, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)/2))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[:len(payload)/2])
+		},
+	})
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
@@ -424,44 +380,30 @@ func TestMidRangeEOFRetriesRecovery(t *testing.T) {
 	attempts := map[string]int{}
 	firstHalf := func(start, end int64) int64 { return end - (end-start+1)/2 + 1 }
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			w.Header().Set("Accept-Ranges", "bytes")
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		start, end, ok := parseRangeHeader(r.Header.Get("Range"), len(payload))
-		if !ok {
-			http.Error(w, "bad range", http.StatusBadRequest)
-			return
-		}
-		key := fmt.Sprintf("%d-%d", start, end)
-		attemptsMu.Lock()
-		attempts[key]++
-		n := attempts[key]
-		attemptsMu.Unlock()
+	srv := newRangeServer(t, payload, &rangeServerConfig{
+		Write: func(w http.ResponseWriter, r *http.Request, payload []byte, start, end int64) {
+			key := fmt.Sprintf("%d-%d", start, end)
+			attemptsMu.Lock()
+			attempts[key]++
+			n := attempts[key]
+			attemptsMu.Unlock()
 
-		// Every range is truncated on its FIRST attempt: the headers
-		// promise the full range (so the Content-Range check passes) but
-		// we write only the first half and then close the connection —
-		// exactly a CDN closing mid-stream. The second attempt serves
-		// the full range. Truncating every attempt (TestShortRangeBodyErrors)
-		// only exercises the retry-budget exhaustion path.
-		if n == 1 {
-			cut := firstHalf(start, end)
+			// Every range is truncated on its FIRST attempt: the headers
+			// promise the full range (so the Content-Range check passes) but
+			// we write only the first half and then close the connection —
+			// exactly a CDN closing mid-stream. The second attempt serves
+			// the full range. Truncating every attempt (TestShortRangeBodyErrors)
+			// only exercises the retry-budget exhaustion path.
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
 			w.WriteHeader(http.StatusPartialContent)
-			_, _ = w.Write(payload[start : cut+1])
-			return
-		}
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
-		w.WriteHeader(http.StatusPartialContent)
-		_, _ = w.Write(payload[start : end+1])
-	}))
-	t.Cleanup(srv.Close)
+			if n == 1 {
+				_, _ = w.Write(payload[start : firstHalf(start, end)+1])
+				return
+			}
+			_, _ = w.Write(payload[start : end+1])
+		},
+	})
 
 	dir := t.TempDir()
 	outFile := filepath.Join(dir, "out.bin")
