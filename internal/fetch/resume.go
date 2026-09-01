@@ -35,7 +35,9 @@ func resumePath(outFile string) string { return outFile + ".gofetch.resume" }
 
 // saveResume writes the current progress to disk atomically (tmp+rename).
 // Returns nil if d.resumePath is empty (resume disabled).
-func (d *Downloader) saveResume(completed []Task) error {
+// states are the live worker states of the running range download (nil for
+// single-stream and for post-run saves) used to capture the in-progress task.
+func (d *Downloader) saveResume(url string, completed []Task, states []*workerState) error {
 	if d.resumePath == "" {
 		return nil
 	}
@@ -53,7 +55,7 @@ func (d *Downloader) saveResume(completed []Task) error {
 	// only by an explicit -h hash verify at end of run.
 	var inProgress *Task
 	var inProgressDone int64
-	for _, ws := range d.workerStates {
+	for _, ws := range states {
 		if ws == nil {
 			continue
 		}
@@ -77,7 +79,7 @@ func (d *Downloader) saveResume(completed []Task) error {
 	}
 
 	state := ResumeState{
-		URL: d.url, OutFile: d.outFile, TotalSize: d.totalSize,
+		URL: url, OutFile: d.outFile, TotalSize: d.totalSize,
 		HashAlgo: d.hashAlgo, ExpectedHash: d.expectedHash,
 		Completed:      dedupTasks(completed),
 		InProgress:     inProgress,

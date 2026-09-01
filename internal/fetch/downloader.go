@@ -44,10 +44,6 @@ type Downloader struct {
 	// worker.reset() cannot drop progress before the next save.
 	completedMu sync.Mutex
 	completed   []Task
-
-	// workerStates holds live state for each worker so we can
-	// persist in-progress progress to the resume sidecar.
-	workerStates []*workerState
 }
 
 // Options configures NewDownloader. Zero values enable auto-optimization.
@@ -102,8 +98,7 @@ const smallFileThreshold = 64 * 1024
 // On success it calls finalize with the active progress tracker and file
 // writer; on failure it returns the most-recent error.
 func (d *Downloader) Download(ctx context.Context) error {
-	origURL := d.url
-	urls := append([]string{origURL}, d.mirrors...)
+	urls := append([]string{d.url}, d.mirrors...)
 	var lastErr error
 
 	for i, activeURL := range urls {
@@ -126,91 +121,13 @@ func (d *Downloader) Download(ctx context.Context) error {
 			continue
 		}
 
-		// If we carried completed ranges from a failed mirror, wipe them
-		// when the new probe proves a different size (cannot reuse bytes).
-		if d.resumeEnabled && info.total > 0 && d.totalSize > 0 && info.total != d.totalSize {
-			d.vlog("size changed %d → %d; discarding progress", d.totalSize, info.total)
-			_ = os.Truncate(d.outFile, 0)
-			d.seedCompleted(nil)
-			_ = clearResume(d.resumePath)
-		}
+		// applyProbe commits size + auto-tune and wipes progress if the
+		// probe proves a different size than a prior mirror (cannot reuse bytes).
+		d.applyProbe(info)
 
-		d.totalSize = info.total
-		d.autoConfig.Retune(info.total)
-		d.workersN = d.autoConfig.Workers
-		d.bufSize = d.autoConfig.BufSize
-		d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
-
-		var completed []Task
-		if d.resumeEnabled {
-			st, err := loadResume(d.resumePath, activeURL, info.total)
-			if err != nil {
-				d.vlog("corrupt resume file, restarting from scratch: %v", err)
-				_ = clearResume(d.resumePath)
-				// Preserve in-memory progress from same-size mirror failover.
-				completed = d.snapshotCompleted()
-			} else if st != nil {
-				completed = st.Completed
-				// Promote partial in-progress bytes into completed so
-				// uncompleted() skips already-written spans. The leftover
-				// [Start+Done, End] stays out of completed and is re-seeded.
-				// (Older code inverted this and marked the undownloaded
-				// remainder as done — permanent holes on resume.)
-				if st.InProgress != nil && st.InProgressDone > 0 {
-					writtenEnd := st.InProgress.Start + st.InProgressDone - 1
-					if writtenEnd >= st.InProgress.Start && writtenEnd <= st.InProgress.End {
-						completed = append(completed, Task{
-							Start: st.InProgress.Start,
-							End:   writtenEnd,
-						})
-						d.vlog("resuming in-progress range %d-%d (done %d bytes)",
-							st.InProgress.Start, st.InProgress.End, st.InProgressDone)
-					}
-				}
-				completed = dedupTasks(completed)
-				d.seedCompleted(completed)
-
-				// Inherit the hash algo+value that was active when
-				// the sidecar was written, so a sha512 download
-				// surviving a process restart verifies with the
-				// right algorithm (we never persist just the digest).
-				if st.HashAlgo != "" && d.hashAlgo == "" {
-					d.hashAlgo = st.HashAlgo
-				}
-				if st.ExpectedHash != "" && d.expectedHash == "" {
-					d.expectedHash = st.ExpectedHash
-				}
-				d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
-			} else {
-				// URL mismatch (typical on mirror failover): the on-disk
-				// sidecar is for a different URL, so we look at in-memory
-				// completed ranges carried from a prior attempt.
-				//
-				// Two mirrors that report the *same* size may carry
-				// *different* bytes (a stale snapshot, a misconfigured
-				// mirror, a same-length man-in-the-middle). Without a
-				// per-chunk manifest to vouch for the bytes a prior
-				// mirror wrote, reusing completed ranges would silently
-				// splice bytes from two different files into the output
-				// and only show up as a final whole-file hash mismatch.
-				// Per-chunk verification during the next download
-				// (worker.go VerifyChunk) is only consulted when a
-				// manifest is loaded — so gate reuse on its presence.
-				if d.manifest != nil {
-					completed = d.snapshotCompleted()
-					if len(completed) > 0 {
-						d.vlog("reusing %d in-memory completed ranges for mirror (manifest vouches)", len(completed))
-					}
-				} else {
-					n := len(d.snapshotCompleted())
-					completed = nil
-					d.seedCompleted(nil)
-					if n > 0 {
-						d.vlog("mirror switch without manifest; discarded %d in-memory ranges to avoid cross-mirror splicing", n)
-					}
-				}
-			}
-		}
+		// completed holds ranges to skip: from a matching on-disk sidecar,
+		// or in-memory progress carried over from a failed mirror.
+		completed := d.resolveResume(activeURL, info.total)
 
 		f, err := allocateFileWriter(d.outFile, info.total, d.resumeEnabled)
 		if err != nil {
@@ -224,7 +141,6 @@ func (d *Downloader) Download(ctx context.Context) error {
 		// the entire function returns.
 		err = d.downloadFromMirror(ctx, activeURL, info, completed, f)
 		if err == nil {
-			d.url = origURL
 			// Single ownership of Sync/Close/hash: leaves never finalize.
 			return d.finalize(f, nil)
 		}
@@ -261,29 +177,123 @@ func (d *Downloader) Download(ctx context.Context) error {
 	return lastErr
 }
 
+// applyProbe records probe results: re-tunes auto-config and wipes
+// accumulated progress if a mirror serves a different size than the
+// one a prior mirror advertised (the bytes cannot be reused).
+func (d *Downloader) applyProbe(info probeInfo) {
+	// If we carried completed ranges from a failed mirror, wipe them
+	// when the new probe proves a different size (cannot reuse bytes).
+	if d.resumeEnabled && info.total > 0 && d.totalSize > 0 && info.total != d.totalSize {
+		d.vlog("size changed %d → %d; discarding progress", d.totalSize, info.total)
+		_ = os.Truncate(d.outFile, 0)
+		d.seedCompleted(nil)
+		_ = clearResume(d.resumePath)
+	}
+
+	d.totalSize = info.total
+	d.autoConfig.Retune(info.total)
+	d.workersN = d.autoConfig.Workers
+	d.bufSize = d.autoConfig.BufSize
+	d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
+}
+
+// resolveResume derives the seed ranges (completed) for a fresh mirror
+// attempt from the on-disk sidecar (keyed to activeURL) plus any
+// in-memory progress carried over from a prior failed mirror. It seeds
+// the accumulator as a side effect. Returns nil when resume is disabled.
+func (d *Downloader) resolveResume(activeURL string, total int64) []Task {
+	var completed []Task
+	if !d.resumeEnabled {
+		return nil
+	}
+	st, err := loadResume(d.resumePath, activeURL, total)
+	if err != nil {
+		d.vlog("corrupt resume file, restarting from scratch: %v", err)
+		_ = clearResume(d.resumePath)
+		// Preserve in-memory progress from same-size mirror failover.
+		return d.snapshotCompleted()
+	} else if st != nil {
+		completed = st.Completed
+		// Promote partial in-progress bytes into completed so
+		// uncompleted() skips already-written spans. The leftover
+		// [Start+Done, End] stays out of completed and is re-seeded.
+		// (Older code inverted this and marked the undownloaded
+		// remainder as done — permanent holes on resume.)
+		if st.InProgress != nil && st.InProgressDone > 0 {
+			writtenEnd := st.InProgress.Start + st.InProgressDone - 1
+			if writtenEnd >= st.InProgress.Start && writtenEnd <= st.InProgress.End {
+				completed = append(completed, Task{
+					Start: st.InProgress.Start,
+					End:   writtenEnd,
+				})
+				d.vlog("resuming in-progress range %d-%d (done %d bytes)",
+					st.InProgress.Start, st.InProgress.End, st.InProgressDone)
+			}
+		}
+		completed = dedupTasks(completed)
+		d.seedCompleted(completed)
+
+		// Inherit the hash algo+value that was active when
+		// the sidecar was written, so a sha512 download
+		// surviving a process restart verifies with the
+		// right algorithm (we never persist just the digest).
+		if st.HashAlgo != "" && d.hashAlgo == "" {
+			d.hashAlgo = st.HashAlgo
+		}
+		if st.ExpectedHash != "" && d.expectedHash == "" {
+			d.expectedHash = st.ExpectedHash
+		}
+		d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
+	} else {
+		// URL mismatch (typical on mirror failover): the on-disk
+		// sidecar is for a different URL, so we look at in-memory
+		// completed ranges carried from a prior attempt.
+		//
+		// Two mirrors that report the *same* size may carry
+		// *different* bytes (a stale snapshot, a misconfigured
+		// mirror, a same-length man-in-the-middle). Without a
+		// per-chunk manifest to vouch for the bytes a prior
+		// mirror wrote, reusing completed ranges would silently
+		// splice bytes from two different files into the output
+		// and only show up as a final whole-file hash mismatch.
+		// Per-chunk verification during the next download
+		// (worker.go VerifyChunk) is only consulted when a
+		// manifest is loaded — so gate reuse on its presence.
+		if d.manifest != nil {
+			completed = d.snapshotCompleted()
+			if len(completed) > 0 {
+				d.vlog("reusing %d in-memory completed ranges for mirror (manifest vouches)", len(completed))
+			}
+		} else {
+			n := len(d.snapshotCompleted())
+			completed = nil
+			d.seedCompleted(nil)
+			if n > 0 {
+				d.vlog("mirror switch without manifest; discarded %d in-memory ranges to avoid cross-mirror splicing", n)
+			}
+		}
+	}
+	return completed
+}
+
 // downloadFromMirror attempts to download from a single URL using either
 // range or single-stream mode.
 func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, info probeInfo, completed []Task, f fileWriter) error {
-	// Temporarily set d.url so runTask/workerLoop use the active mirror.
-	savedURL := d.url
-	d.url = activeURL
-	defer func() { d.url = savedURL }()
-
 	// Load per-chunk integrity manifest for both range and single-stream
 	// paths (previously only rangeDownload loaded it).
 	d.loadManifestIfPresent()
 
 	if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
-		return d.singleDownload(ctx, info.total, completed, f)
+		return d.singleDownload(ctx, activeURL, info.total, completed, f)
 	}
-	err := d.rangeDownload(ctx, info.total, completed, f)
+	err := d.rangeDownload(ctx, activeURL, info.total, completed, f)
 	if errors.Is(err, errRangeNotSupported) {
 		// Probe advertised ranges but the first Range GET returned 200.
 		// Abort range mode and stream the whole object once. Do not treat
 		// any partial range progress as complete — singleDownload rewrites
 		// from byte 0 and ignores completed ranges.
 		d.vlog("Range request returned 200 OK; falling back to single-stream")
-		return d.singleDownload(ctx, info.total, completed, f)
+		return d.singleDownload(ctx, activeURL, info.total, completed, f)
 	}
 	return err
 }

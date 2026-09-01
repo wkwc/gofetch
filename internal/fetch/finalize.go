@@ -80,7 +80,9 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 			if d.resumePath != "" {
 				if bad := d.manifest.BadChunks(d.outFile); len(bad) > 0 {
 					d.dropCompletedOverlapping(bad)
-					_ = d.saveResume(d.snapshotCompleted())
+					// finalize only runs on the primary URL (never a
+					// mirror), and workers have drained, so no states.
+					_ = d.saveResume(d.url, d.snapshotCompleted(), nil)
 				}
 			}
 			return err
@@ -147,7 +149,7 @@ func formatDuration(d time.Duration) string {
 // must always emit a final sidecar otherwise the last recordCompleted
 // of the run is silently dropped if it landed within the throttle
 // window — next run would re-fetch the bytes the loop already wrote.
-func (d *Downloader) maybeSaveResume(force bool) {
+func (d *Downloader) maybeSaveResume(force bool, url string, states []*workerState) {
 	if d.resumePath == "" {
 		return
 	}
@@ -157,7 +159,7 @@ func (d *Downloader) maybeSaveResume(force bool) {
 			return
 		}
 	}
-	if d.saveResume(d.snapshotCompleted()) == nil {
+	if d.saveResume(url, d.snapshotCompleted(), states) == nil {
 		d.lastResumeSave.Store(time.Now().UnixNano())
 	}
 }

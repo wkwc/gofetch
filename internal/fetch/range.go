@@ -27,21 +27,19 @@ func seedResumeBytes(prog *progress, completed []Task) {
 // It seeds the work queue from ~1 MiB chunks of the uncompleted gaps,
 // runs workers until the queue drains, and signals completion.
 // The file writer f is managed by the caller (already open, will be closed by caller).
-func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed []Task, f fileWriter) error {
+func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64, completed []Task, f fileWriter) error {
 	if total <= 0 {
 		// Ranges with unknown size cannot seed tasks safely — fall back
 		// to single-stream rather than "succeeding" with an empty file.
-		// workerStates is left nil: there's no parallel work to monitor
+		// No worker states exist here: there's no parallel work to monitor
 		// and resume has no per-range byte counts to persist.
-		return d.singleDownload(ctx, total, completed, f)
+		return d.singleDownload(ctx, url, total, completed, f)
 	}
 
 	states := make([]*workerState, d.workersN)
 	for i := range states {
 		states[i] = newWorkerState()
 	}
-	// Store worker states in Downloader so we can persist in-progress progress
-	d.workerStates = states
 
 	prog := newProgress(total, states)
 	seedResumeBytes(prog, completed)
@@ -80,7 +78,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 	for _, ws := range states {
 		go func(ws *workerState) {
 			defer workers.Done()
-			d.workerLoop(ctx, ws, queue, f, saveC)
+			d.workerLoop(ctx, url, ws, queue, f, saveC)
 		}(ws)
 	}
 
@@ -117,7 +115,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 				if !ok {
 					break
 				}
-				if err := d.runTask(ctx, nil, task, f); err != nil {
+				if err := d.runTask(ctx, url, nil, task, f); err != nil {
 					for _, ws := range states {
 						ws.setErr(err)
 					}
@@ -148,7 +146,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 		select {
 		case <-ctx.Done():
 			if d.resumePath != "" {
-				d.maybeSaveResume(true)
+				d.maybeSaveResume(true, url, states)
 			}
 			<-done
 			return ctx.Err()
@@ -160,9 +158,9 @@ func (d *Downloader) rangeDownload(ctx context.Context, total int64, completed [
 			}
 			return nil
 		case <-saveC:
-			d.maybeSaveResume(false)
+			d.maybeSaveResume(false, url, states)
 		case <-resumeC:
-			d.maybeSaveResume(false)
+			d.maybeSaveResume(false, url, states)
 		case <-progressC:
 			d.printProgress(prog, false)
 		}

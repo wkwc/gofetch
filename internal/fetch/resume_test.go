@@ -21,7 +21,7 @@ func TestResumeStateRoundTrip(t *testing.T) {
 		resumePath:   resumePath(outFile),
 	}
 	want := []Task{{0, 999999}, {2000000, 2999999}, {5000000, 6299999}}
-	if err := d.saveResume(want); err != nil {
+	if err := d.saveResume(url, want, nil); err != nil {
 		t.Fatalf("saveResume: %v", err)
 	}
 	// Verify the sidecar file exists at the canonical path
@@ -58,7 +58,7 @@ func TestLoadResumeMismatch(t *testing.T) {
 		totalSize:  1000,
 		resumePath: path,
 	}
-	if err := d.saveResume([]Task{{0, 9}}); err != nil {
+	if err := d.saveResume("https://example.com/file", []Task{{0, 9}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// URL mismatch → nil state (different download, not an error)
@@ -85,7 +85,7 @@ func TestResumeClearAndCorrupt(t *testing.T) {
 		totalSize:  100,
 		resumePath: path,
 	}
-	_ = d.saveResume([]Task{{0, 9}})
+	_ = d.saveResume("https://example.com/file", []Task{{0, 9}}, nil)
 
 	if err := clearResume(path); err != nil {
 		t.Fatalf("clearResume: %v", err)
@@ -110,7 +110,7 @@ func TestResumeClearAndCorrupt(t *testing.T) {
 func TestSaveResumeNoPath(t *testing.T) {
 	// resumePath=="" → saveResume is a no-op
 	d := &Downloader{resumePath: ""}
-	if err := d.saveResume([]Task{}); err != nil {
+	if err := d.saveResume("", []Task{}, nil); err != nil {
 		t.Errorf("empty resumePath should be no-op: %v", err)
 	}
 }
@@ -429,7 +429,7 @@ func TestFinalizeClearsOnNoManifestHashFailure(t *testing.T) {
 	}
 	d.seedCompleted([]Task{{0, 39}})
 	// Pre-create the sidecar so we can assert it gets cleared.
-	if err := d.saveResume(d.snapshotCompleted()); err != nil {
+	if err := d.saveResume(url, d.snapshotCompleted(), nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(d.resumePath); err != nil {

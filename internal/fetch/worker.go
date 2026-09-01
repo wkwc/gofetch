@@ -120,7 +120,7 @@ func parseRetryAfter(h http.Header) time.Duration {
 	return 5 * time.Second
 }
 
-func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Queue, f fileWriter, saveC chan<- struct{}) {
+func (d *Downloader) workerLoop(ctx context.Context, url string, ws *workerState, queue *Queue, f fileWriter, saveC chan<- struct{}) {
 	for {
 		if err := ctx.Err(); err != nil {
 			ws.setErr(err)
@@ -130,7 +130,7 @@ func (d *Downloader) workerLoop(ctx context.Context, ws *workerState, queue *Que
 		if !ok {
 			return
 		}
-		err := d.runTask(ctx, ws, task, f)
+		err := d.runTask(ctx, url, ws, task, f)
 		switch {
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			// Steal/retry may leave a durable written prefix; commit it
@@ -240,7 +240,7 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 
 // runTask performs the HTTP range request for one task, writing bytes
 // to f. ws may be nil for the single-stream fallback path.
-func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f fileWriter) error {
+func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, task Task, f fileWriter) error {
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if ws != nil {
@@ -257,7 +257,7 @@ func (d *Downloader) runTask(ctx context.Context, ws *workerState, task Task, f 
 
 	var lastErr error
 	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
-		req, err := http.NewRequestWithContext(rctx, http.MethodGet, d.url, nil)
+		req, err := http.NewRequestWithContext(rctx, http.MethodGet, url, nil)
 		if err != nil {
 			return err
 		}
@@ -349,106 +349,127 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// readBody streams the 206 response body for one task into f, using the
+// zero-copy mmap path when the writer exposes its underlying slice.
 func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *workerState, body io.ReadCloser) error {
 	// Idle-timeout wrapper so a stalled body after headers is retryable
 	// instead of hanging forever (steal only fires after bytesDone ≥ 1).
 	idle := newIdleBody(ctx, body, defaultBodyIdle)
 	defer drainAndClose(idle)
+	_, err := d.pumpBody(idle, f, ws, task.Start, task.End, true)
+	return err
+}
 
-	// Zero-copy fast path when the writer exposes the underlying mmap slice.
+// pumpBody streams body into f across the inclusive byte range
+// [start, end], returning bytes written. When strict is true, EOF before
+// the range is fully written is wrapped as io.ErrUnexpectedEOF so the
+// worker treats it as retryable; when false (single-stream) EOF ends the
+// stream and the caller checks the byte count itself. end < 0 means the
+// size is unknown: write everything until EOF (caller truncates).
+// Zero-copy fast path: reads go straight into the writer's mmap slice.
+func (d *Downloader) pumpBody(body io.Reader, f fileWriter, ws *workerState, start, end int64, strict bool) (int64, error) {
 	if wb, ok := f.(mmapWriterBytes); ok {
 		if data := wb.Bytes(); data != nil {
-			return d.readBodyDirect(idle, task, ws, data)
+			if end >= 0 && end+1 > int64(len(data)) {
+				return 0, fmt.Errorf("mmap slice short: end=%d len=%d", end, len(data))
+			}
+			return d.pumpBodyDirect(body, ws, data, start, end, strict)
 		}
 	}
-
+	manifest := d.manifest
+	cursor := start
 	buf := acquireBuf(d.bufSize)
 	defer releaseBuf(buf)
-	cursor, end := task.Start, task.End
-	manifest := d.manifest
 	for {
-		n, rerr := idle.Read(buf)
+		n, rerr := body.Read(buf)
 		if n > 0 {
-			if remaining := end - cursor + 1; int64(n) > remaining {
-				n = int(remaining)
+			if end >= 0 {
+				if remaining := end - cursor + 1; int64(n) > remaining {
+					n = int(remaining)
+				}
 			}
 			if _, err := f.WriteAt(buf[:n], cursor); err != nil {
-				return err
+				return cursor - start, err
 			}
 			cursor += int64(n)
 			if ws != nil {
-				ws.bytesDone.Store(cursor - task.Start)
+				ws.bytesDone.Store(cursor - start)
 			}
 			if manifest != nil {
 				if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
-					return err
+					return cursor - start, err
 				}
 			}
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
-				// Inclusive End: full range requires cursor == end+1.
-				if cursor <= end {
+				if strict && end >= 0 && cursor <= end {
 					// Wrap io.ErrUnexpectedEOF so isTransient() (which
 					// tests errors.Is(err, io.ErrUnexpectedEOF)) treats a
 					// server that closed mid-range as retryable and the
 					// worker requeues the range instead of fatally
 					// aborting the download. A plain fmt.Errorf here loses
 					// the transient classification.
-					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes: %w",
-						cursor-task.Start, task.Len(), io.ErrUnexpectedEOF)
+					return cursor - start, fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes: %w",
+						cursor-start, end-start+1, io.ErrUnexpectedEOF)
 				}
-				return nil
+				return cursor - start, nil
 			}
-			return rerr
+			return cursor - start, rerr
 		}
-		if cursor > end {
-			return nil
+		if end >= 0 && cursor > end {
+			return cursor - start, nil
 		}
 	}
 }
 
-func (d *Downloader) readBodyDirect(body io.Reader, task Task, ws *workerState, data []byte) error {
-	taskEnd := task.End
-	if taskEnd+1 > int64(len(data)) {
-		return fmt.Errorf("mmap slice short: end=%d len=%d", taskEnd, len(data))
-	}
-	taskStart := task.Start
-	taskSize := taskEnd - taskStart + 1
-	bufCap := int64(d.bufSize)
+// pumpBodyDirect streams body straight into the mmap'd slice at absolute
+// offsets. cursor is absolute (start..end); bytesDone and verification
+// offsets are derived relative to start so both range tasks and the
+// single-stream path share one cursor model.
+func (d *Downloader) pumpBodyDirect(body io.Reader, ws *workerState, data []byte, start, end int64, strict bool) (int64, error) {
 	manifest := d.manifest
-	cursor := int64(0)
+	bufCap := int64(d.bufSize)
+	cursor := start
 	for {
-		remaining := taskSize - cursor
+		if end >= 0 && cursor > end {
+			return cursor - start, nil
+		}
+		remaining := int64(len(data)) - cursor
 		if remaining <= 0 {
-			return nil
+			return cursor - start, nil
 		}
 		want := bufCap
 		if want > remaining {
 			want = remaining
 		}
-		buf := data[taskStart+cursor : taskStart+cursor+want]
+		if end >= 0 {
+			if rem := end - cursor + 1; want > rem {
+				want = rem
+			}
+		}
+		buf := data[cursor : cursor+want]
 		n, rerr := body.Read(buf)
 		if n > 0 {
 			cursor += int64(n)
 			if ws != nil {
-				ws.bytesDone.Store(cursor)
+				ws.bytesDone.Store(cursor - start)
 			}
 			if manifest != nil {
-				if err := manifest.VerifyChunk(
-					taskStart+cursor-int64(n), taskStart+cursor-1, buf[:n]); err != nil {
-					return err
+				if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, buf[:n]); err != nil {
+					return cursor - start, err
 				}
 			}
 		}
 		if rerr != nil {
 			if errors.Is(rerr, io.EOF) {
-				if cursor < taskSize {
-					return fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes: %w", cursor, taskSize, io.ErrUnexpectedEOF)
+				if strict && end >= 0 && cursor <= end {
+					return cursor - start, fmt.Errorf("server closed connection mid-range: got %d of expected %d bytes: %w",
+						cursor-start, end-start+1, io.ErrUnexpectedEOF)
 				}
-				return nil
+				return cursor - start, nil
 			}
-			return rerr
+			return cursor - start, rerr
 		}
 	}
 }
