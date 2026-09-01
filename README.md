@@ -61,7 +61,7 @@ gofetch -v https://example.com/file.bin
 # Disable resume (always download fresh)
 gofetch --no-resume https://example.com/file.bin
 
-# Mirror fallback (tried in order on failure)
+# Mirror fallback (tried in order on failure; bare hostnames get https://)
 gofetch -m mirror1.com,mirror2.com https://primary.com/file.bin
 ```
 

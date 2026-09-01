@@ -42,7 +42,7 @@ func run() int {
 		verbose     = flag.Bool("v", false, "verbose logging")
 		hashFlag    = flag.String("h", "", "verify integrity: auto-detects local sidecar, or sha256:hex / sha512:hex / path / auto")
 		noResume    = flag.Bool("no-resume", false, "disable resume (default: on)")
-		mirrorsFlag = flag.String("m", "", "comma-separated list of mirror URLs to try on failure")
+		mirrorsFlag = flag.String("m", "", "comma-separated mirror URLs tried on failure (bare hostnames get https://)")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Usage = func() {
@@ -90,23 +90,14 @@ func run() int {
 		out = base
 	}
 
-	var mirrors []string
-	if *mirrorsFlag != "" {
-		mirrors = strings.Split(*mirrorsFlag, ",")
-		for i := range mirrors {
-			mirrors[i] = strings.TrimSpace(mirrors[i])
-			// Validate each mirror URL with the same SSRF guards so
-			// operators cannot accidentally point a mirror at an
-			// internal resource.
-			if err := validateURL(mirrors[i]); err != nil {
-				fmt.Fprintln(os.Stderr, "gofetch: mirror", i+1, err)
-				return 1
-			}
-		}
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	mirrors, err := normalizeMirrors(*mirrorsFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "gofetch:", err)
+		return 1
+	}
 
 	algo, hashHex, err := resolveHash(ctx, *hashFlag, rawURL, out)
 	if err != nil {
@@ -139,6 +130,32 @@ func run() int {
 	// verbose/normal: summary already went to stderr in finalize).
 	fmt.Println(out)
 	return 0
+}
+
+// normalizeMirrors parses the -m flag into validated mirror URLs. Bare
+// hostnames get https:// prepended so `-m mirror1.com,mirror2.com` works
+// as documented. Each mirror is validated with the same SSRF guards as the
+// primary URL.
+func normalizeMirrors(flag string) ([]string, error) {
+	if flag == "" {
+		return nil, nil
+	}
+	parts := strings.Split(flag, ",")
+	mirrors := make([]string, 0, len(parts))
+	for i, m := range parts {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		if !strings.Contains(m, "://") {
+			m = "https://" + m
+		}
+		if err := validateURL(m); err != nil {
+			return nil, fmt.Errorf("mirror %d: %w", i+1, err)
+		}
+		mirrors = append(mirrors, m)
+	}
+	return mirrors, nil
 }
 
 // resolveHash figures out the hash algorithm and expected hex from the -h flag.

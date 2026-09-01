@@ -170,3 +170,45 @@ func TestIsValidHex(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeMirrors(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		got, err := normalizeMirrors("")
+		if err != nil || got != nil {
+			t.Fatalf("empty: got=%v err=%v, want nil/nil", got, err)
+		}
+	})
+
+	t.Run("bare hostnames get https", func(t *testing.T) {
+		got, err := normalizeMirrors("example.com, www.example.com")
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		want := []string{"https://example.com", "https://www.example.com"}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("mirror[%d] = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("explicit scheme preserved", func(t *testing.T) {
+		got, err := normalizeMirrors("http://example.com")
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if len(got) != 1 || got[0] != "http://example.com" {
+			t.Errorf("got %v, want [http://example.com]", got)
+		}
+	})
+
+	t.Run("private mirror rejected", func(t *testing.T) {
+		_, err := normalizeMirrors("127.0.0.1")
+		if err == nil {
+			t.Fatal("expected SSRF rejection of loopback mirror")
+		}
+	})
+}
