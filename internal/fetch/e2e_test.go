@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -500,7 +501,7 @@ func TestMidRangeEOFRetriesRecovery(t *testing.T) {
 func TestRange200FallsBackToSingle(t *testing.T) {
 	// Above smallFileThreshold so downloadFromMirror chooses range mode.
 	payload := makePayload(128 * 1024)
-	var rangeHits, fullHits atomicInt
+	var rangeHits, fullHits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		if r.Method == http.MethodHead {
@@ -511,9 +512,9 @@ func TestRange200FallsBackToSingle(t *testing.T) {
 		}
 		// Always ignore Range and return 200 with the full body.
 		if r.Header.Get("Range") != "" {
-			rangeHits.add(1)
+			rangeHits.Add(1)
 		} else {
-			fullHits.add(1)
+			fullHits.Add(1)
 		}
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
 		w.WriteHeader(http.StatusOK)
@@ -536,28 +537,10 @@ func TestRange200FallsBackToSingle(t *testing.T) {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("content mismatch after 200-fallback: got %d bytes, want %d", len(got), len(payload))
 	}
-	if rangeHits.get() < 1 {
+	if rangeHits.Load() < 1 {
 		t.Fatal("expected at least one Range GET that returned 200")
 	}
-	if fullHits.get() < 1 {
+	if fullHits.Load() < 1 {
 		t.Fatal("expected a non-Range single-stream GET after fallback")
 	}
-}
-
-// atomicInt is a tiny test helper (avoids importing sync/atomic at top for one field).
-type atomicInt struct {
-	mu sync.Mutex
-	n  int
-}
-
-func (a *atomicInt) add(d int) {
-	a.mu.Lock()
-	a.n += d
-	a.mu.Unlock()
-}
-
-func (a *atomicInt) get() int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.n
 }

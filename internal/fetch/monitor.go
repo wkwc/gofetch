@@ -24,7 +24,7 @@ const (
 // picking up the leftover will start from the recorded offset and
 // our own worker observes `cancelFn = nil` after the cancel returns,
 // preventing a second cancel from this monitor loop.
-func (d *Downloader) monitor(ctx context.Context, states []*workerState, queue *Queue) {
+func monitor(ctx context.Context, states []*workerState, queue *Queue) {
 	t := time.NewTicker(monitorInterval)
 	defer t.Stop()
 	for {

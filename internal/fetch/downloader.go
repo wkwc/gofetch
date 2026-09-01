@@ -20,7 +20,7 @@ type Downloader struct {
 	url           string
 	mirrors       []string
 	outFile       string
-	workersN      int
+	workerCount   int
 	bufSize       int
 	resumeEnabled bool
 	quiet         bool
@@ -37,7 +37,7 @@ type Downloader struct {
 
 	lastResumeSave atomic.Int64
 	retryMu        sync.Mutex
-	retryCount     map[[2]int64]int
+	retryCount     map[Task]int
 
 	// completed accumulates finished ranges for resume sidecars.
 	// Seeded from loadResume; updated on every successful task so
@@ -64,7 +64,7 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		url:           rawURL,
 		mirrors:       opt.Mirrors,
 		outFile:       outPath,
-		workersN:      ac.Workers,
+		workerCount:   ac.Workers,
 		bufSize:       ac.BufSize,
 		resumeEnabled: !opt.NoResume,
 		quiet:         opt.Quiet,
@@ -165,11 +165,10 @@ func (d *Downloader) Download(ctx context.Context) error {
 		}
 		// Clear URL-keyed resume sidecar; in-memory completed survives
 		// for same-size failover. Size mismatch is handled after the
-		// next successful probe (below, at loop top via seed logic).
+		// next successful probe (below, at loop top via applyProbe).
 		// NOTE: a genuine same-size mirror MUST NOT reuse completed
-		// ranges across a *different host* — see resetCompletedForHost
-		// below, which discards the accumulator unless a per-chunk
-		// manifest can vouch for the bytes.
+		// ranges across a *different host* — resolveResume gates reuse
+		// on a per-chunk manifest that can vouch for the bytes.
 		_ = clearResume(d.resumePath)
 		d.vlog("mirror failed; keeping %d completed ranges pending next probe",
 			len(d.snapshotCompleted()))
@@ -192,7 +191,7 @@ func (d *Downloader) applyProbe(info probeInfo) {
 
 	d.totalSize = info.total
 	d.autoConfig.Retune(info.total)
-	d.workersN = d.autoConfig.Workers
+	d.workerCount = d.autoConfig.Workers
 	d.bufSize = d.autoConfig.BufSize
 	d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
 }
@@ -202,7 +201,6 @@ func (d *Downloader) applyProbe(info probeInfo) {
 // in-memory progress carried over from a prior failed mirror. It seeds
 // the accumulator as a side effect. Returns nil when resume is disabled.
 func (d *Downloader) resolveResume(activeURL string, total int64) []Task {
-	var completed []Task
 	if !d.resumeEnabled {
 		return nil
 	}
@@ -212,39 +210,8 @@ func (d *Downloader) resolveResume(activeURL string, total int64) []Task {
 		_ = clearResume(d.resumePath)
 		// Preserve in-memory progress from same-size mirror failover.
 		return d.snapshotCompleted()
-	} else if st != nil {
-		completed = st.Completed
-		// Promote partial in-progress bytes into completed so
-		// uncompleted() skips already-written spans. The leftover
-		// [Start+Done, End] stays out of completed and is re-seeded.
-		// (Older code inverted this and marked the undownloaded
-		// remainder as done — permanent holes on resume.)
-		if st.InProgress != nil && st.InProgressDone > 0 {
-			writtenEnd := st.InProgress.Start + st.InProgressDone - 1
-			if writtenEnd >= st.InProgress.Start && writtenEnd <= st.InProgress.End {
-				completed = append(completed, Task{
-					Start: st.InProgress.Start,
-					End:   writtenEnd,
-				})
-				d.vlog("resuming in-progress range %d-%d (done %d bytes)",
-					st.InProgress.Start, st.InProgress.End, st.InProgressDone)
-			}
-		}
-		completed = dedupTasks(completed)
-		d.seedCompleted(completed)
-
-		// Inherit the hash algo+value that was active when
-		// the sidecar was written, so a sha512 download
-		// surviving a process restart verifies with the
-		// right algorithm (we never persist just the digest).
-		if st.HashAlgo != "" && d.hashAlgo == "" {
-			d.hashAlgo = st.HashAlgo
-		}
-		if st.ExpectedHash != "" && d.expectedHash == "" {
-			d.expectedHash = st.ExpectedHash
-		}
-		d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
-	} else {
+	}
+	if st == nil {
 		// URL mismatch (typical on mirror failover): the on-disk
 		// sidecar is for a different URL, so we look at in-memory
 		// completed ranges carried from a prior attempt.
@@ -260,19 +227,51 @@ func (d *Downloader) resolveResume(activeURL string, total int64) []Task {
 		// (worker.go VerifyChunk) is only consulted when a
 		// manifest is loaded — so gate reuse on its presence.
 		if d.manifest != nil {
-			completed = d.snapshotCompleted()
+			completed := d.snapshotCompleted()
 			if len(completed) > 0 {
 				d.vlog("reusing %d in-memory completed ranges for mirror (manifest vouches)", len(completed))
 			}
-		} else {
-			n := len(d.snapshotCompleted())
-			completed = nil
-			d.seedCompleted(nil)
-			if n > 0 {
-				d.vlog("mirror switch without manifest; discarded %d in-memory ranges to avoid cross-mirror splicing", n)
-			}
+			return completed
+		}
+		n := len(d.snapshotCompleted())
+		d.seedCompleted(nil)
+		if n > 0 {
+			d.vlog("mirror switch without manifest; discarded %d in-memory ranges to avoid cross-mirror splicing", n)
+		}
+		return nil
+	}
+
+	completed := st.Completed
+	// Promote partial in-progress bytes into completed so
+	// uncompleted() skips already-written spans. The leftover
+	// [Start+Done, End] stays out of completed and is re-seeded.
+	// (Older code inverted this and marked the undownloaded
+	// remainder as done — permanent holes on resume.)
+	if st.InProgress != nil && st.InProgressDone > 0 {
+		writtenEnd := st.InProgress.Start + st.InProgressDone - 1
+		if writtenEnd >= st.InProgress.Start && writtenEnd <= st.InProgress.End {
+			completed = append(completed, Task{
+				Start: st.InProgress.Start,
+				End:   writtenEnd,
+			})
+			d.vlog("resuming in-progress range %d-%d (done %d bytes)",
+				st.InProgress.Start, st.InProgress.End, st.InProgressDone)
 		}
 	}
+	completed = dedupTasks(completed)
+	d.seedCompleted(completed)
+
+	// Inherit the hash algo+value that was active when
+	// the sidecar was written, so a sha512 download
+	// surviving a process restart verifies with the
+	// right algorithm (we never persist just the digest).
+	if st.HashAlgo != "" && d.hashAlgo == "" {
+		d.hashAlgo = st.HashAlgo
+	}
+	if st.ExpectedHash != "" && d.expectedHash == "" {
+		d.expectedHash = st.ExpectedHash
+	}
+	d.vlog("resumed from %d completed chunks (algo=%s)", len(completed), d.hashAlgo)
 	return completed
 }
 

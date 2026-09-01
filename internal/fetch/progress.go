@@ -53,7 +53,6 @@ func formatFixed2(f float64) string {
 type progress struct {
 	total     int64
 	states    []*workerState
-	startTime int64
 	prevDone  int64
 	prevTime  int64
 	ewmaSpeed float64
@@ -63,7 +62,7 @@ type progress struct {
 
 func newProgress(total int64, states []*workerState) *progress {
 	now := time.Now().UnixNano()
-	return &progress{total: total, states: states, startTime: now, prevTime: now}
+	return &progress{total: total, states: states, prevTime: now}
 }
 
 func (p *progress) add(n int64) {

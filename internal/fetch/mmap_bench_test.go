@@ -2,7 +2,6 @@ package fetch
 
 import (
 	"os"
-	"syscall"
 	"testing"
 )
 
@@ -20,20 +19,16 @@ func BenchmarkMmapSingle(b *testing.B) {
 
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		var fdUintptr uintptr
 		fd, err := os.OpenFile(path, os.O_RDWR, 0o644)
 		if err != nil {
 			b.Fatal(err)
 		}
-		fdUintptr = fd.Fd()
-		data, err := syscall.Mmap(int(fdUintptr), 0, int(size),
-			syscall.PROT_READ|syscall.PROT_WRITE,
-			syscall.MAP_SHARED)
+		data, err := mmapSys(fd.Fd(), int(size))
 		if err != nil {
 			b.Fatal(err)
 		}
 		_ = data
-		if err := syscall.Munmap(data); err != nil {
+		if err := munmapSys(data); err != nil {
 			b.Fatal(err)
 		}
 		_ = fd.Close()

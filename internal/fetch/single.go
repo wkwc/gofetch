@@ -14,8 +14,6 @@ import (
 // the caller threads progress through finalize() at the end. There is no
 // parallel work to monitor, so no worker states are created on this path.
 func (d *Downloader) singleDownload(ctx context.Context, url string, total int64, completed []Task, f fileWriter) error {
-	ws := newWorkerState()
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -59,7 +57,7 @@ func (d *Downloader) singleDownload(ctx context.Context, url string, total int64
 	if total > 0 {
 		end = total - 1
 	}
-	written, err := d.pumpBody(idle, f, ws, 0, end, false)
+	written, err := d.pumpBody(idle, f, nil, 0, end, false)
 	if err != nil {
 		return err
 	}

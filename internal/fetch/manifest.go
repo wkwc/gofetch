@@ -125,6 +125,30 @@ func (m *Manifest) VerifyRange(start, end int64, data []byte) error {
 	return nil
 }
 
+// readChunkHash seeks to c.Start and hashes the chunk's bytes, returning
+// the hex digest. Shared by VerifyFull and BadChunks so the seek/read
+// loop is defined once.
+func readChunkHash(f *os.File, c ChunkHash, algo string, buf []byte) (string, error) {
+	size := c.End - c.Start + 1
+	if _, err := f.Seek(c.Start, io.SeekStart); err != nil {
+		return "", err
+	}
+	h := newHash(algo)
+	remaining := size
+	for remaining > 0 {
+		n := int64(len(buf))
+		if n > remaining {
+			n = remaining
+		}
+		if _, err := io.ReadFull(f, buf[:n]); err != nil {
+			return "", err
+		}
+		h.Write(buf[:n])
+		remaining -= n
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // VerifyFull reads path and verifies every chunk in the manifest.
 func (m *Manifest) VerifyFull(path string) error {
 	if m == nil {
@@ -138,24 +162,10 @@ func (m *Manifest) VerifyFull(path string) error {
 	const bufSize = 256 * 1024
 	buf := make([]byte, bufSize)
 	for _, c := range m.Chunks {
-		size := c.End - c.Start + 1
-		if _, err := f.Seek(c.Start, io.SeekStart); err != nil {
-			return fmt.Errorf("manifest: seek %d: %w", c.Start, err)
+		got, err := readChunkHash(f, c, m.Algo, buf)
+		if err != nil {
+			return fmt.Errorf("manifest: chunk %d-%d: %w", c.Start, c.End, err)
 		}
-		h := newHash(m.Algo)
-		remaining := size
-		for remaining > 0 {
-			n := int64(bufSize)
-			if n > remaining {
-				n = remaining
-			}
-			if _, err := io.ReadFull(f, buf[:n]); err != nil {
-				return fmt.Errorf("manifest: read %d-%d: %w", c.Start, c.End, err)
-			}
-			h.Write(buf[:n])
-			remaining -= n
-		}
-		got := hex.EncodeToString(h.Sum(nil))
 		if !hexEqual(got, c.Hash) {
 			return fmt.Errorf("manifest: chunk %d-%d hash mismatch: expected %s, got %s",
 				c.Start, c.End, c.Hash, got)
@@ -185,33 +195,13 @@ func (m *Manifest) BadChunks(path string) []ChunkHash {
 	buf := make([]byte, bufSize)
 	var bad []ChunkHash
 	for _, c := range m.Chunks {
-		size := c.End - c.Start + 1
-		if _, err := f.Seek(c.Start, io.SeekStart); err != nil {
+		got, err := readChunkHash(f, c, m.Algo, buf)
+		if err != nil {
 			// A seek/read error against one chunk: be conservative and
 			// report it as bad so the resume sidecar drops it.
 			bad = append(bad, c)
 			continue
 		}
-		h := newHash(m.Algo)
-		remaining := size
-		readErr := false
-		for remaining > 0 {
-			n := int64(bufSize)
-			if n > remaining {
-				n = remaining
-			}
-			if _, err := io.ReadFull(f, buf[:n]); err != nil {
-				bad = append(bad, c)
-				readErr = true
-				break
-			}
-			h.Write(buf[:n])
-			remaining -= n
-		}
-		if readErr {
-			continue
-		}
-		got := hex.EncodeToString(h.Sum(nil))
 		if !hexEqual(got, c.Hash) {
 			bad = append(bad, c)
 		}

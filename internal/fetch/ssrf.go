@@ -74,13 +74,9 @@ func CheckRedirectSafe(req *http.Request, via []*http.Request) error {
 func tunedDialer() *net.Dialer {
 	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 10 * time.Second}
 	d.Control = func(network, address string, c syscall.RawConn) error {
-		var ctrlErr error
-		if err := c.Control(func(fd uintptr) {
-			ctrlErr = tuneFD(fd)
-		}); err != nil {
-			return err
-		}
-		return ctrlErr
+		return c.Control(func(fd uintptr) {
+			tuneFD(fd)
+		})
 	}
 	return d
 }

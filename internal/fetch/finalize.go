@@ -37,13 +37,10 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 		}()
 	}
 	if prog == nil {
-		states := make([]*workerState, max(d.workersN, 1))
-		for i := range states {
-			states[i] = newWorkerState()
-		}
-		prog = newProgress(d.totalSize, states)
-		// Reflect we have everything (downloader only calls finalize on
-		// success — the EOF path) so the snapshot reads the real total.
+		// No live workers to sum (downloader only calls finalize on the
+		// success path, after workers drained), so pass nil states and
+		// reflect the whole file via preDone.
+		prog = newProgress(d.totalSize, nil)
 		if d.totalSize > 0 {
 			prog.add(d.totalSize)
 		}
@@ -123,7 +120,7 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", humanBytes(done))
 	fmt.Fprintf(os.Stderr, "  time:    %s\n", formatDuration(elapsed))
 	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", humanBytes(int64(speed)))
-	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workersN)
+	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workerCount)
 
 	return nil
 }
