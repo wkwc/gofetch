@@ -164,8 +164,8 @@ gofetch/
     seeds.go                       # Range splitting and gap computation
     task.go                        # Task struct and lock-free FIFO queue
     progress.go                    # Progress tracking, byte formatting, verbose log
-    finalize.go                    # Hash verification, resume save, sparse allocation
-    resume.go                      # Resume state persistence (JSON sidecar)
+    finalize.go                    # Sync/close, integrity verify, download summary
+    resume.go                      # Resume state: persistence, accumulator, sidecar cleanup
     hash.go                        # SHA-256/512 computation and verification
     manifest.go                    # Per-chunk integrity manifest (O(1) lookup)
     optimizer.go                   # Auto-config + transport factory

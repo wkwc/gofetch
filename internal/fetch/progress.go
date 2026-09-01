@@ -64,6 +64,19 @@ func formatFixed(f float64, digits int) string {
 	return strconv.FormatInt(whole, 10) + "." + frac
 }
 
+// formatDuration formats a duration in human-readable form.
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	m := int(d.Minutes())
+	s := int(d.Seconds()) - m*60
+	return fmt.Sprintf("%dm%ds", m, s)
+}
+
 // progress tracks total bytes downloaded across all workers.
 // On demand, snapshot sums per-worker bytesDone (cheap — only called
 // ~4 times/sec for the progress bar, plus once at finalize).

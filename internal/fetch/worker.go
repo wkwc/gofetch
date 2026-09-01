@@ -383,6 +383,7 @@ func (d *Downloader) pumpBody(body io.Reader, f fileWriter, ws *workerState, sta
 		return 0, fmt.Errorf("mmap slice short: end=%d len=%d", end, len(direct))
 	}
 	manifest := d.manifest
+	bufCap := int64(d.bufSize)
 	cursor := start
 	var buf []byte
 	if direct == nil {
@@ -402,7 +403,7 @@ func (d *Downloader) pumpBody(body io.Reader, f fileWriter, ws *workerState, sta
 			if remaining <= 0 {
 				return cursor - start, nil
 			}
-			want := int64(d.bufSize)
+			want := bufCap
 			if want > remaining {
 				want = remaining
 			}

@@ -24,6 +24,16 @@ const maxSeedTasks = 262144
 // use bigger chunks via seedChunkSize / splitRange auto-growth.
 const minSeedChunk int64 = 1 << 20
 
+// ceilDiv returns ceil(a/b) for positive b, without overflow. Used for
+// chunk counts where any remainder means one more (partial) chunk.
+func ceilDiv(a, b int64) int64 {
+	n := a / b
+	if a%b != 0 {
+		n++
+	}
+	return n
+}
+
 // seedChunkSize returns the chunk size to use when seeding range tasks
 // for a file of the given total size. Always ≥ minSeedChunk, and large
 // enough that ceil(total/chunk) ≤ maxSeedTasks.
@@ -34,10 +44,7 @@ func seedChunkSize(total int64) int64 {
 	// chunk = max(minSeedChunk, ceil(total/maxSeedTasks))
 	// total and maxSeedTasks are positive and maxSeedTasks fits int64,
 	// so total/maxSeedTasks cannot overflow int64.
-	cs := total / maxSeedTasks
-	if total%maxSeedTasks != 0 {
-		cs++
-	}
+	cs := ceilDiv(total, maxSeedTasks)
 	if cs < minSeedChunk {
 		return minSeedChunk
 	}
@@ -60,28 +67,19 @@ func splitRange(offset, length, chunkSize int64) []Task {
 	}
 	// n = ceil(length / chunkSize), saturating to avoid int64 overflow
 	// panic in `make` for server-controlled values near MaxInt64.
-	n := length / chunkSize
-	if rem := length % chunkSize; rem != 0 {
-		n++
-	}
+	n := ceilDiv(length, chunkSize)
 	if n > maxSeedTasks {
 		// Grow chunkSize so ceil(length/chunkSize) ≤ maxSeedTasks while
 		// still covering [offset, end). Defense in depth: callers should
 		// already pass seedChunkSize(total), but uncompleted() gaps or
 		// future call sites must not re-introduce unbounded growth.
-		chunkSize = length / maxSeedTasks
-		if length%maxSeedTasks != 0 {
-			chunkSize++
-		}
+		chunkSize = ceilDiv(length, maxSeedTasks)
 		if chunkSize <= 0 {
 			// length was huge relative to maxSeedTasks but the division
 			// somehow underflowed; fail closed with a single task.
 			return []Task{{Start: offset, End: end - 1}}
 		}
-		n = length / chunkSize
-		if rem := length % chunkSize; rem != 0 {
-			n++
-		}
+		n = ceilDiv(length, chunkSize)
 		if n > maxSeedTasks {
 			n = maxSeedTasks
 		}
