@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// AllowLoopbackDial, when true, permits dials to loopback addresses.
+// AllowLoopbackDial permits dials to loopback addresses when true.
 // Production stays false; unit tests set it so httptest can bind 127.0.0.1.
 // Never enable this for the CLI entrypoint.
 var AllowLoopbackDial bool

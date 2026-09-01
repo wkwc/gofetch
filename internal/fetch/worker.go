@@ -244,8 +244,7 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 	defer cancel()
 	if ws != nil {
 		ws.reset(task)
-		cf := context.CancelFunc(cancel)
-		ws.cancelFn.Store(&cf)
+		ws.cancelFn.Store(&cancel)
 		defer ws.cancelFn.Store(nil)
 	}
 
