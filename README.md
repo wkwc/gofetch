@@ -73,6 +73,12 @@ gofetch -m mirror1.com,mirror2.com https://primary.com/file.bin
 
 If the server doesn't support `Range`, it gracefully falls back to a single GET stream.
 
+The progress bar is terminal-aware: on a TTY it renders the live `\r` bar;
+when stderr is piped or redirected it stays headless-clean, printing a single
+plain final line (no ANSI codes). On Ctrl-C/SIGTERM the partial download is
+preserved to the resume sidecar and gofetch exits with status 130, printing
+`interrupted; partial progress saved, re-run to resume`.
+
 ## Why
 
 Most "range downloaders" are dumb: split into N chunks, fetch each, merge at the end.

@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -123,6 +124,14 @@ func run() int {
 	})
 
 	if err := d.Download(ctx); err != nil {
+		// User-initiated cancel (Ctrl-C / SIGTERM) is not a failure of
+		// the downloader — the partial progress was already flushed to
+		// the resume sidecar, so say so plainly instead of wrapping it
+		// as a mirror error.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			fmt.Fprintln(os.Stderr, "gofetch: interrupted; partial progress saved, re-run to resume")
+			return 130
+		}
 		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
 	}
