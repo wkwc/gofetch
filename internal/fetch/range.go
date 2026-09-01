@@ -51,10 +51,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 	// seedCap is only a make() hint; the actual count is produced by
 	// splitRange over uncompleted() gaps. Cap the hint the same way so
 	// a hostile total cannot panic makeslice.
-	seedCap := total / chunkSize
-	if total%chunkSize != 0 {
-		seedCap++
-	}
+	seedCap := int(ceilDiv(total, chunkSize))
 	if seedCap > maxSeedTasks {
 		seedCap = maxSeedTasks
 	} else if seedCap < 0 {

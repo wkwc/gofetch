@@ -180,13 +180,9 @@ func envProxyHost(hostport string) bool {
 // timeout covers the entire request (use for short sidecar fetches).
 func NewSafeClient(timeout time.Duration) *http.Client {
 	ac := AutoConfigure(0)
-	t := newAutoTransport(ac)
-	// Sidecar fetches never need a private-IP proxy hop exception beyond
-	// DialContextAuto (which already allows env proxy hosts).
-	t.DialContext = DialContextAuto
 	return &http.Client{
 		Timeout:       timeout,
-		Transport:     t,
+		Transport:     newAutoTransport(ac),
 		CheckRedirect: CheckRedirectSafe,
 	}
 }

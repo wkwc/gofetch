@@ -77,6 +77,9 @@ func (d *Downloader) singleDownload(ctx context.Context, url string, total int64
 		if err := f.Truncate(written); err != nil {
 			return fmt.Errorf("truncate to %d: %w", written, err)
 		}
+		// The size was unknown until EOF; now that we know it, record it
+		// so finalize reports the true byte count (not 0 B).
+		d.totalSize = written
 		if d.resumePath != "" {
 			d.seedCompleted(nil)
 			_ = clearResume(d.resumePath)

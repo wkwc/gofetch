@@ -473,3 +473,38 @@ func TestRange200FallsBackToSingle(t *testing.T) {
 		t.Fatal("expected a non-Range single-stream GET after fallback")
 	}
 }
+
+// TestUnknownSizeSingleStream verifies the no-Content-Length path: the
+// server streams a body with unknown size (chunked), single-stream is used,
+// and the download completes with the real byte count recorded on the
+// Downloader so finalize reports the actual size.
+func TestUnknownSizeSingleStream(t *testing.T) {
+	payload := makePayload(300 * 1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		// No Content-Length → Go uses chunked encoding; probe falls back
+		// to a range GET which also omits size → single-stream.
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+	d := NewDownloader(srv.URL, outFile, Options{Quiet: true, NoResume: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := d.Download(ctx); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if d.totalSize != int64(len(payload)) {
+		t.Errorf("d.totalSize = %d, want %d", d.totalSize, len(payload))
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
