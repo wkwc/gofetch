@@ -40,7 +40,7 @@ func run() int {
 		outPath     = flag.String("o", "", "output file path (default: basename of URL)")
 		quiet       = flag.Bool("q", false, "suppress progress output")
 		verbose     = flag.Bool("v", false, "verbose logging")
-		hashFlag    = flag.String("h", "", "verify integrity (sha256:hex, sha512:hex, auto, or path to .sha256/.sha512 sidecar)")
+		hashFlag    = flag.String("h", "", "verify integrity: auto-detects local sidecar, or sha256:hex / sha512:hex / path / auto")
 		noResume    = flag.Bool("no-resume", false, "disable resume (default: on)")
 		mirrorsFlag = flag.String("m", "", "comma-separated list of mirror URLs to try on failure")
 		showVersion = flag.Bool("version", false, "print version and exit")
@@ -56,7 +56,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "examples:")
 		fmt.Fprintln(os.Stderr, "  gofetch https://example.com/file.bin")
 		fmt.Fprintln(os.Stderr, "  gofetch -o out.bin https://example.com/file.bin")
-		fmt.Fprintln(os.Stderr, "  gofetch -h auto https://example.com/file.bin        # auto-detect .sha256/.sha512 sidecar")
+		fmt.Fprintln(os.Stderr, "  gofetch -h auto https://example.com/file.bin        # local sidecar, else fetch .sha256/.sha512")
 		fmt.Fprintln(os.Stderr, "  gofetch -h sha256:abc123... https://example.com/file.bin")
 		fmt.Fprintln(os.Stderr, "  gofetch -q https://example.com/file.bin             # quiet (prints filename only)")
 		fmt.Fprintln(os.Stderr, "  gofetch -v https://example.com/file.bin              # verbose (debug to stderr)")
@@ -143,18 +143,21 @@ func run() int {
 
 // resolveHash figures out the hash algorithm and expected hex from the -h flag.
 // Supports:
-//   - ""            → no verification
-//   - "auto"        → try to fetch <url>.sha256 or <url>.sha512 sidecar
+//   - ""            → auto-detect a local <out>.sha256/.sha512 sidecar; no verification if none
+//   - "auto"        → local sidecar first, else fetch <url>.sha256 / <url>.sha512
 //   - "sha256:hex"  → explicit algo + hex
 //   - "sha512:hex"  → explicit algo + hex
 //   - "hex..."      → bare hex, treated as sha256
 //   - "/path/file"  → read sidecar file from local path
 func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo, hashHex string, err error) {
-	if flag == "" {
-		return "", "", nil
-	}
-	if flag == "auto" {
-		return autoDetectSidecar(ctx, rawURL)
+	if flag == "" || flag == "auto" {
+		// "" auto-detects a local <out>.sha256/.sha512 sidecar only.
+		// "auto" falls back to fetching <url>.sha256 / <url>.sha512.
+		algo, hex, e := autoDetectLocalSidecar(outPath)
+		if flag == "" || e != nil || hex != "" {
+			return algo, hex, e
+		}
+		return autoDetectRemoteSidecar(ctx, rawURL)
 	}
 	// Check if it's a local file path
 	if _, statErr := os.Stat(flag); statErr == nil {
@@ -168,8 +171,23 @@ func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo
 	return fetch.ParseHashFlag(flag)
 }
 
-// autoDetectSidecar tries to fetch <url>.sha256 then <url>.sha512 sidecar files.
-func autoDetectSidecar(ctx context.Context, rawURL string) (algo, hashHex string, err error) {
+// autoDetectLocalSidecar looks for <out>.sha256, <out>.sha512 (and the
+// *sum variants) next to the output file. This makes hash verification
+// work with zero configuration when a sidecar already sits beside the
+// download — the common case for mirrors that ship checksums.
+func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
+	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sha512sum"} {
+		path := outPath + suffix
+		if _, statErr := os.Stat(path); statErr != nil {
+			continue
+		}
+		return readSidecarFile(path)
+	}
+	return "", "", nil
+}
+
+// autoDetectRemoteSidecar fetches <url>.sha256 then <url>.sha512 sidecars.
+func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex string, err error) {
 	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sha512sum"} {
 		sidecarURL := rawURL + suffix
 		algo, hex, e := fetchSidecarURL(ctx, sidecarURL)

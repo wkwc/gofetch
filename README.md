@@ -33,26 +33,20 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **Output** | `-o PATH` | Output file path (default: basename of URL) |
 | **Quiet** | `-q` | Suppress progress bar; print only filename on success |
 | **Verbose** | `-v` | Verbose logging to stderr (mirror selection, task starts, retries, chunk verification) |
-| **Hash** | `-h SPEC` | Verify integrity: `sha256:hex`, `sha512:hex`, `auto` (fetch sidecar), or path to `.sha256`/`.sha512` file |
+| **Hash** | `-h SPEC` | Verify integrity. Zero-config by default (auto-detects local sidecar); override with `sha256:hex`, `sha512:hex`, `auto`, or a sidecar path |
 | **No Resume** | `--no-resume` | Disable resume from `.gofetch.resume` (default: enabled) |
 | **Mirrors** | `-m URL1,URL2` | Comma-separated mirror URLs tried in order on failure |
 
 ## Usage
 
 ```bash
-# Basic download
+# Basic download (auto-verifies a local .sha256/.sha512 sidecar if present)
 gofetch https://example.com/file.bin
 
 # Custom output path
 gofetch -o out.bin https://example.com/file.bin
 
-# Hash verification (explicit)
-gofetch -h sha256:abc123... https://example.com/file.bin
-
-# SHA-512 verification
-gofetch -h sha512:abc123... https://example.com/file.bin
-
-# Auto-detect sidecar hash file (fetches URL.sha256, URL.sha512, etc.)
+# Auto-detect sidecar (local first, else fetch URL.sha256 / URL.sha512)
 gofetch -h auto https://example.com/file.bin
 
 # Local sidecar file
@@ -124,11 +118,17 @@ The `-h` flag supports multiple formats:
 
 | Format | Example |
 |---|---|
+| *(default)* | No `-h` needed: a local `<output>.sha256`/`.sha512` sidecar is auto-detected next to the output file |
 | `sha256:hex` | `gofetch -h sha256:abc123...` |
 | `sha512:hex` | `gofetch -h sha512:abc123...` |
-| `auto` (fetch sidecar) | `gofetch -h auto https://...` fetches `.sha256` then `.sha512` sidecars |
+| `auto` | local sidecar first, else fetches `URL.sha256`/`.sha512` sidecars |
 | bare hex (assumes sha256) | `gofetch -h abc123...` |
 | local sidecar file | `gofetch -h /path/file.sha256 https://...` |
+
+Integrity verification is zero-config when a checksum sidecar already sits
+beside the output (the common case for mirrors that ship `.sha256`/`.sha512`
+files) — `gofetch` finds and uses it automatically. Explicit `-h` values
+override auto-detection.
 
 Sidecar files are parsed in common formats: `<hash> [filename]` or just `<hash>`.
 Algorithm is inferred from hash length (64 = sha256, 128 = sha512) or file extension.

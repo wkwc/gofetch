@@ -37,17 +37,30 @@ func (d *Downloader) probeURL(ctx context.Context, rawURL string) (probeInfo, er
 	return d.probeRangeGetURL(ctx, rawURL)
 }
 
-func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
+// probeRequest issues a single probe request (HEAD or range GET), drains
+// the body so the connection can be reused, and returns the response.
+func (d *Downloader) probeRequest(ctx context.Context, method, rawURL, rangeHeader string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
 	if err != nil {
-		return probeInfo{}, false, err
+		return nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	if rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
+	}
 	resp, err := d.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	drainAndClose(resp.Body)
+	return resp, nil
+}
+
+func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo, bool, error) {
+	resp, err := d.probeRequest(ctx, http.MethodHead, rawURL, "")
 	if err != nil {
 		return probeInfo{}, false, err
 	}
-	drainAndClose(resp.Body)
 	switch resp.StatusCode {
 	case http.StatusOK:
 		ar := resp.Header.Get("Accept-Ranges")
@@ -70,17 +83,10 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 }
 
 func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probeInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	resp, err := d.probeRequest(ctx, http.MethodGet, rawURL, "bytes=0-0")
 	if err != nil {
 		return probeInfo{}, err
 	}
-	req.Header.Set("Range", "bytes=0-0")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := d.client.Do(req)
-	if err != nil {
-		return probeInfo{}, err
-	}
-	drainAndClose(resp.Body)
 	switch resp.StatusCode {
 	case http.StatusPartialContent:
 		_, _, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
