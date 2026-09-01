@@ -182,7 +182,7 @@ func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo
 	}
 	// Check if it's a URL
 	if strings.HasPrefix(flag, "http://") || strings.HasPrefix(flag, "https://") {
-		return fetchSidecarURL(ctx, flag)
+		return fetchSidecarURL(ctx, fetch.NewSafeClient(15*time.Second), flag)
 	}
 	// Otherwise parse as algo:hex or bare hex
 	return fetch.ParseHashFlag(flag)
@@ -204,10 +204,13 @@ func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
 }
 
 // autoDetectRemoteSidecar fetches <url>.sha256 then <url>.sha512 sidecars.
+// A single SSRF-hardened client is reused across suffix attempts so the
+// transport and connection pool are created once, not per attempt.
 func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex string, err error) {
+	client := fetch.NewSafeClient(15 * time.Second)
 	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sha512sum"} {
 		sidecarURL := rawURL + suffix
-		algo, hex, e := fetchSidecarURL(ctx, sidecarURL)
+		algo, hex, e := fetchSidecarURL(ctx, client, sidecarURL)
 		if e == nil && hex != "" {
 			return algo, hex, nil
 		}
@@ -217,7 +220,7 @@ func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex 
 
 // fetchSidecarURL fetches a sidecar hash file from a URL and parses it.
 // Requires HTTPS and rejects private/internal IP ranges to prevent SSRF.
-func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex string, err error) {
+func fetchSidecarURL(ctx context.Context, client *http.Client, sidecarURL string) (algo, hashHex string, err error) {
 	parsed, err := url.Parse(sidecarURL)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid sidecar URL: %w", err)
@@ -234,7 +237,6 @@ func fetchSidecarURL(ctx context.Context, sidecarURL string) (algo, hashHex stri
 		return "", "", fmt.Errorf("create request: %w", err)
 	}
 	// Same SSRF-hardened dial + redirect policy as the main downloader.
-	client := fetch.NewSafeClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("request failed: %w", err)

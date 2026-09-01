@@ -56,7 +56,6 @@ type readReq struct {
 type readResult struct {
 	n   int
 	err error
-	buf []byte
 }
 
 func tryConnDeadline(r io.Reader) connDeadliner {
@@ -142,7 +141,7 @@ func (b *idleBody) startHelper() {
 					return
 				}
 				n, err := b.r.Read(req.buf)
-				req.res <- readResult{n: n, err: err, buf: req.buf}
+				req.res <- readResult{n: n, err: err}
 			}
 		}
 	}()
@@ -200,24 +199,24 @@ func (b *idleBody) Read(p []byte) (int, error) {
 	case <-b.ctx.Done():
 		b.forceClose()
 		select {
-		case res := <-resCh:
-			releaseBuf(res.buf)
+		case <-resCh:
+			releaseBuf(tmp)
 		case <-time.After(2 * time.Second):
 		}
 		return 0, b.ctx.Err()
 	case <-b.timer.C:
 		b.forceClose()
 		select {
-		case res := <-resCh:
-			releaseBuf(res.buf)
+		case <-resCh:
+			releaseBuf(tmp)
 		case <-time.After(2 * time.Second):
 		}
 		return 0, errBodyIdle
 	case res := <-resCh:
 		if res.n > 0 {
-			copy(p, res.buf[:res.n])
+			copy(p, tmp[:res.n])
 		}
-		releaseBuf(res.buf)
+		releaseBuf(tmp)
 		return res.n, res.err
 	}
 }
