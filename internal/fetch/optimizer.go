@@ -39,7 +39,7 @@ func AutoConfigure(fileSizeHint int64) AutoConfig {
 func scaleWorkers(totalSize int64, cores int) int {
 	if totalSize <= 0 {
 		w := cores + 2
-		return clampInt(w, 4, 12)
+		return min(max(w, 4), 12)
 	}
 	// Aim for ~8 chunks per worker so workers stay busy without
 	// idle spin on giant files.
@@ -133,14 +133,4 @@ func newAutoTransport(ac AutoConfig) *http.Transport {
 		WriteBufferSize:       ac.BufSize,
 	}
 	return tr
-}
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }

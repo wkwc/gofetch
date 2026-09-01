@@ -41,15 +41,8 @@ func newRangeServer(t *testing.T, payload []byte) *httptest.Server {
 			_, _ = w.Write(payload)
 			return
 		}
-		var start, end int64
-		if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil {
-			http.Error(w, "bad range", http.StatusBadRequest)
-			return
-		}
-		if end >= int64(len(payload)) {
-			end = int64(len(payload)) - 1
-		}
-		if start < 0 || start > end {
+		start, end, ok := parseRangeHeader(rangeHeader, len(payload))
+		if !ok {
 			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
@@ -82,4 +75,21 @@ func sha256Hex(data []byte) string {
 func sha512Hex(data []byte) string {
 	h := sha512.Sum512(data)
 	return hex.EncodeToString(h[:])
+}
+
+// parseRangeHeader parses "bytes=START-END" against a payload of the given
+// size, clamping END to size-1. Returns ok=false for malformed or
+// unsatisfiable ranges (START<0 or START>END after clamping).
+func parseRangeHeader(h string, size int) (start, end int64, ok bool) {
+	var s, e int64
+	if _, err := fmt.Sscanf(h, "bytes=%d-%d", &s, &e); err != nil {
+		return 0, 0, false
+	}
+	if e >= int64(size) {
+		e = int64(size) - 1
+	}
+	if s < 0 || s > e {
+		return 0, 0, false
+	}
+	return s, e, true
 }

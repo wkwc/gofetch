@@ -2,6 +2,15 @@ package fetch
 
 import "sort"
 
+// sortedByStart returns a copy of tasks sorted ascending by Start.
+// Shared by uncompleted and dedupTasks so both walk ranges in order.
+func sortedByStart(tasks []Task) []Task {
+	sorted := make([]Task, len(tasks))
+	copy(sorted, tasks)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+	return sorted
+}
+
 // maxSeedTasks caps how many Task values a single splitRange call (and
 // therefore the range-mode seed queue) may allocate. At the default 1 MiB
 // chunk this covers 256 GiB; larger totals grow the chunk size so the
@@ -114,9 +123,7 @@ func uncompleted(full Task, completed []Task) []Task {
 	if len(completed) == 0 {
 		return []Task{full}
 	}
-	sorted := make([]Task, len(completed))
-	copy(sorted, completed)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+	sorted := sortedByStart(completed)
 	var out []Task
 	cursor := full.Start
 	for _, c := range sorted {

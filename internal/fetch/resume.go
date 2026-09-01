@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 )
 
@@ -191,9 +190,7 @@ func dedupTasks(tasks []Task) []Task {
 	if len(tasks) <= 1 {
 		return tasks
 	}
-	sorted := make([]Task, len(tasks))
-	copy(sorted, tasks)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+	sorted := sortedByStart(tasks)
 	n := 1
 	for _, t := range sorted[1:] {
 		last := &sorted[n-1]

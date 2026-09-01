@@ -359,6 +359,15 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 	return err
 }
 
+// mmapBytes returns the writer's mmap'd backing slice, or nil when the
+// writer is not mmap-backed (raw pwrite fallback).
+func mmapBytes(f fileWriter) []byte {
+	if wb, ok := f.(mmapWriterBytes); ok {
+		return wb.Bytes()
+	}
+	return nil
+}
+
 // pumpBody streams body into f across the inclusive byte range
 // [start, end], returning bytes written. When strict is true, EOF before
 // the range is fully written is wrapped as io.ErrUnexpectedEOF so the
@@ -369,10 +378,7 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 // Zero-copy fast path: when the writer exposes an mmap slice, reads go
 // straight into it and no pooled buffer is acquired.
 func (d *Downloader) pumpBody(body io.Reader, f fileWriter, ws *workerState, start, end int64, strict bool) (int64, error) {
-	var direct []byte
-	if wb, ok := f.(mmapWriterBytes); ok {
-		direct = wb.Bytes()
-	}
+	direct := mmapBytes(f)
 	if end >= 0 && direct != nil && end+1 > int64(len(direct)) {
 		return 0, fmt.Errorf("mmap slice short: end=%d len=%d", end, len(direct))
 	}
@@ -461,13 +467,11 @@ func (d *Downloader) verifyTaskRange(task Task, f fileWriter) error {
 	if size <= 0 {
 		return nil
 	}
-	if wb, ok := f.(mmapWriterBytes); ok {
-		if data := wb.Bytes(); data != nil {
-			if task.End+1 > int64(len(data)) {
-				return fmt.Errorf("manifest: task %d-%d past mmap len %d", task.Start, task.End, len(data))
-			}
-			return d.manifest.VerifyRange(task.Start, task.End, data[task.Start:task.End+1])
+	if data := mmapBytes(f); data != nil {
+		if task.End+1 > int64(len(data)) {
+			return fmt.Errorf("manifest: task %d-%d past mmap len %d", task.Start, task.End, len(data))
 		}
+		return d.manifest.VerifyRange(task.Start, task.End, data[task.Start:task.End+1])
 	}
 	// Non-mmap: re-read the span for VerifyRange when the writer is a
 	// raw file (os.File.ReadAt).

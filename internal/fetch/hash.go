@@ -9,15 +9,11 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 )
 
 // hashBufSize is the buffer size used for hash computation.
-const hashBufSize = 256 * 1024 // 256 KiB
-
-var hashBufPool = sync.Pool{
-	New: func() any { b := make([]byte, hashBufSize); return &b },
-}
+// Matches the worker read-buffer pool so fileHexHash shares it.
+const hashBufSize = bufSizeLarge
 
 // newHash returns a hash.Hash for the given algorithm name.
 func newHash(algo string) hash.Hash {
@@ -89,9 +85,9 @@ func fileHexHash(path, algo string) (string, error) {
 	}
 	defer func() { _ = f.Close() }()
 	h := newHash(algo)
-	bp := hashBufPool.Get().(*[]byte)
-	defer hashBufPool.Put(bp)
-	if _, err := io.CopyBuffer(h, f, *bp); err != nil {
+	buf := acquireBuf(hashBufSize)
+	defer releaseBuf(buf)
+	if _, err := io.CopyBuffer(h, f, buf); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

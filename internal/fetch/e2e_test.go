@@ -245,15 +245,8 @@ func TestProbeHeadUnsupported(t *testing.T) {
 			_, _ = w.Write(payload)
 			return
 		}
-		var start, end int64
-		if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil {
-			http.Error(w, "bad range", http.StatusBadRequest)
-			return
-		}
-		if end >= int64(len(payload)) {
-			end = int64(len(payload)) - 1
-		}
-		if start < 0 || start > end {
+		start, end, ok := parseRangeHeader(rangeHeader, len(payload))
+		if !ok {
 			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
@@ -318,13 +311,10 @@ func TestProbeHeadNoContentLength(t *testing.T) {
 			_, _ = w.Write(payload)
 			return
 		}
-		var start, end int64
-		if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil {
-			http.Error(w, "bad range", http.StatusBadRequest)
+		start, end, ok := parseRangeHeader(rangeHeader, len(payload))
+		if !ok {
+			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
 			return
-		}
-		if end >= int64(len(payload)) {
-			end = int64(len(payload)) - 1
 		}
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
@@ -441,13 +431,10 @@ func TestMidRangeEOFRetriesRecovery(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		var start, end int64
-		if _, err := fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end); err != nil {
+		start, end, ok := parseRangeHeader(r.Header.Get("Range"), len(payload))
+		if !ok {
 			http.Error(w, "bad range", http.StatusBadRequest)
 			return
-		}
-		if end >= int64(len(payload)) {
-			end = int64(len(payload)) - 1
 		}
 		key := fmt.Sprintf("%d-%d", start, end)
 		attemptsMu.Lock()
