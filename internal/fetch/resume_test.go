@@ -501,3 +501,38 @@ func TestAtomicWriteFileFailures(t *testing.T) {
 		}
 	})
 }
+
+// TestResolveResumeCrossMirrorSpliceGuard pins the security guard that
+// prevents silently splicing bytes from two different mirrors: switching
+// to a mirror WITHOUT a per-chunk manifest must discard in-memory
+// completed ranges (same-size mirrors may serve different bytes). With a
+// manifest vouching for the bytes, reuse is allowed.
+func TestResolveResumeCrossMirrorSpliceGuard(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("discards without manifest", func(t *testing.T) {
+		d := NewDownloader("http://primary.example/file.bin", filepath.Join(dir, "a.bin"), Options{})
+		d.seedCompleted([]Task{{Start: 0, End: 999}})
+		if n := len(d.snapshotCompleted()); n != 1 {
+			t.Fatalf("precondition: %d completed ranges, want 1", n)
+		}
+		// Mirror failover, same size, no manifest on disk.
+		completed := d.resolveResume("http://mirror.example/file.bin", 1000)
+		if len(completed) != 0 {
+			t.Fatalf("resolveResume reused %d ranges without a manifest: %v", len(completed), completed)
+		}
+		if n := len(d.snapshotCompleted()); n != 0 {
+			t.Fatalf("accumulator not cleared: %d ranges", n)
+		}
+	})
+
+	t.Run("reuses with manifest", func(t *testing.T) {
+		d := NewDownloader("http://primary.example/file.bin", filepath.Join(dir, "b.bin"), Options{})
+		d.manifest = &Manifest{Version: ManifestVersion, Algo: "sha256"}
+		d.seedCompleted([]Task{{Start: 0, End: 999}})
+		completed := d.resolveResume("http://mirror.example/file.bin", 1000)
+		if len(completed) != 1 || completed[0].Start != 0 || completed[0].End != 999 {
+			t.Fatalf("expected manifest-vouched reuse, got %v", completed)
+		}
+	})
+}
