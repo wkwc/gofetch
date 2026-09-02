@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/wkwc/gofetch/internal/fetch"
@@ -57,4 +59,49 @@ func normalizeMirrors(flag string) ([]string, error) {
 		mirrors = append(mirrors, m)
 	}
 	return mirrors, nil
+}
+
+// parseRateLimit parses a human bandwidth cap like "500k", "2M", "1G"
+// (KiB/MiB/GiB, case-insensitive) into bytes/second. Bare numbers are
+// bytes/second. "" or "0" disables throttling.
+func parseRateLimit(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	mult := int64(1)
+	switch last := s[len(s)-1]; last {
+	case 'k', 'K':
+		mult = 1 << 10
+		s = s[:len(s)-1]
+	case 'm', 'M':
+		mult = 1 << 20
+		s = s[:len(s)-1]
+	case 'g', 'G':
+		mult = 1 << 30
+		s = s[:len(s)-1]
+	}
+	if s == "" {
+		return 0, fmt.Errorf("invalid rate %q (use e.g. 500k, 2M, 1G)", s)
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid rate %q (use e.g. 500k, 2M, 1G)", s)
+	}
+	if n > math.MaxInt64/mult {
+		return 0, fmt.Errorf("rate too large: %q", s)
+	}
+	return n * mult, nil
+}
+
+// validateHeaders rejects malformed "Name: value" headers up front so
+// the download loop never starts with a header that will be dropped.
+func validateHeaders(headers []string) error {
+	for _, h := range headers {
+		name, _, ok := strings.Cut(h, ":")
+		if !ok || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("invalid header %q (expected 'Name: value')", h)
+		}
+	}
+	return nil
 }

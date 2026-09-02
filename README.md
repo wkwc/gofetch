@@ -30,12 +30,17 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 
 | Feature | Flag | Description |
 |---|---|---|
-| **Output** | `-o PATH` | Output file path (default: basename of URL) |
+| **Output** | `-o PATH` | Output file path (default: basename of URL); an existing directory downloads into it |
+| **Multiple URLs** | `gofetch URL1 URL2` | Download several URLs at once (with `-o`, into a directory) |
 | **Quiet** | `-q` | Suppress progress bar; print only filename on success |
 | **Verbose** | `-v` | Verbose logging to stderr (mirror selection, task starts, retries, chunk verification) |
-| **Hash** | `-h SPEC` | Verify integrity. Zero-config by default (auto-detects local sidecar); override with `sha256:hex`, `sha512:hex`, `auto`, or a sidecar path |
+| **Hash** | `-h SPEC` | Verify integrity. Zero-config by default (auto-detects local sidecar); override with `sha256:hex`, `sha512:hex`, `auto`, or a sidecar path. **Note:** `-h` is the hash flag — use `-help` for help |
 | **No Resume** | `--no-resume` | Disable resume from `.gofetch.resume` (default: enabled) |
 | **Mirrors** | `-m URL1,URL2` | Comma-separated mirror URLs tried in order on failure |
+| **Headers** | `-H "Name: value"` | Send a custom header (repeatable; auth/cookies) |
+| **User-Agent** | `-A VALUE` | Override the default `gofetch/1.0` User-Agent (alias: `--user-agent`) |
+| **Rate limit** | `--limit-rate` | Cap aggregate download speed per file (`500k`, `2M`, `1G`) |
+| **Proxy** | `--proxy URL` | HTTP(S)/SOCKS5 proxy; overrides the environment |
 | **Manifest** | `-manifest-out PATH` | After download, write a per-chunk integrity manifest to PATH |
 | **Local bench** | `--allow-loopback` | Permit loopback/private dials (for the bundled benchserver / tests; unsafe for untrusted URLs) |
 
@@ -65,6 +70,24 @@ gofetch --no-resume https://example.com/file.bin
 
 # Mirror fallback (tried in order on failure; bare hostnames get https://)
 gofetch -m mirror1.com,mirror2.com https://primary.com/file.bin
+
+# Multiple URLs at once (each to its basename; -o must be a directory)
+gofetch -o ~/Downloads https://a.example/x.bin https://b.example/y.bin
+
+# Existing directory as -o downloads into it by basename
+gofetch -o ~/Downloads https://example.com/file.bin
+
+# Authenticated / header-bearing request
+gofetch -H 'Authorization: Bearer token' -H 'Cookie: session=abc' -o out.bin https://example.com/private.bin
+
+# Custom User-Agent (some mirrors reject the default)
+gofetch -A 'Mozilla/5.0 (compatible)' -o out.bin https://example.com/file.bin
+
+# Cap aggregate bandwidth (per file)
+gofetch --limit-rate 2M -o out.bin https://example.com/large.bin
+
+# Explicit proxy (overrides HTTP_PROXY/HTTPS_PROXY/ALL_PROXY)
+gofetch --proxy http://proxy.example.com:8080 -o out.bin https://example.com/file.bin
 
 # Generate a per-chunk integrity manifest after download (chunk-level verification for future runs)
 gofetch -manifest-out out.gofetch.manifest -o out.bin https://example.com/file.bin
@@ -97,10 +120,11 @@ but "parallel curl."
    and pushes the unfinished half back to the shared work queue for another worker to grab.
 3. **Lock-free progress.** There is no shared `done` counter — the progress
    display sums worker-local `bytesDone` atomics on demand.
-4. **Zero user knobs.** Workers, buffer size, transport tuning, retries, parallelism,
+4. **Zero user knobs for the engine.** Workers, buffer size, transport tuning, retries, parallelism,
    HTTP version, and chunk size are all derived from the server's `Content-Length`,
-   `runtime.NumCPU()` and round-trip-time class. The only flags are for things
-   that genuinely require user input (`-o`, `-q`, `-v`, `-h`, `--no-resume`).
+   `runtime.NumCPU()` and round-trip-time class. The flags are only for things
+   that genuinely require user input (`-o`, `-q`, `-v`, `-h`, `--no-resume`, plus
+   opt-in `-H`/`-A`/`--limit-rate`/`--proxy`).
 5. **Small file fallback.** Files smaller than 64 KiB skip the worker/monitor
    stack entirely and use a single GET stream (parallel overhead dominates).
 
