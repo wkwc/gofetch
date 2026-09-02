@@ -276,6 +276,31 @@ func TestRunHeaders(t *testing.T) {
 	}
 }
 
+func TestRunHeaderCannotOverrideIdentity(t *testing.T) {
+	var enc string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "3")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		enc = r.Header.Get("Accept-Encoding")
+		w.Header().Set("Content-Length", "3")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("abc"))
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "e.bin")
+	code := run([]string{"--allow-loopback", "-q", "-H", "Accept-Encoding: gzip", "-o", out, srv.URL})
+	if code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+	if enc != "identity" {
+		t.Errorf("Accept-Encoding = %q, want identity (user header must not override it)", enc)
+	}
+}
+
 func TestRunVersion(t *testing.T) {
 	if code := run([]string{"-version"}); code != 0 {
 		t.Errorf("run(-version) = %d, want 0", code)

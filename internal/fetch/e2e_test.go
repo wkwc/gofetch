@@ -508,3 +508,61 @@ func TestUnknownSizeSingleStream(t *testing.T) {
 		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
 	}
 }
+
+// TestRateLimitedNoThrash pins the steal-vs-rate-limit interaction: with a
+// rate cap below the monitor's steal threshold (~700 KiB/s), the
+// work-stealing monitor must not cancel and re-request partially-written
+// ranges (that would thrash forever). Each 1 MiB seed range is requested
+// exactly once.
+func TestRateLimitedNoThrash(t *testing.T) {
+	const rate int64 = 512 << 10 // 512 KiB/s < ~700 KiB/s steal threshold
+	payload := makePayload(2 << 20)
+
+	var mu sync.Mutex
+	reqs := map[string]int{}
+	srv := newRangeServer(t, payload, &rangeServerConfig{
+		Write: func(w http.ResponseWriter, _ *http.Request, payload []byte, start, end int64) {
+			mu.Lock()
+			reqs[fmt.Sprintf("%d-%d", start, end)]++
+			mu.Unlock()
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.WriteHeader(http.StatusPartialContent)
+			const block = 16 * 1024
+			for cur := start; cur <= end; cur += block {
+				end2 := cur + block - 1
+				if end2 > end {
+					end2 = end
+				}
+				_, _ = w.Write(payload[cur : end2+1])
+			}
+		},
+	})
+
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.bin")
+	d := NewDownloader(srv.URL, outFile, Options{RateLimit: rate, Quiet: true, NoResume: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.Download(ctx); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reqs) != 2 {
+		t.Fatalf("got %d distinct range requests, want the 2 seeds exactly: %v", len(reqs), reqs)
+	}
+	for k, n := range reqs {
+		if n != 1 {
+			t.Errorf("range %s requested %d times, want 1 (steal thrash)", k, n)
+		}
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}

@@ -79,13 +79,24 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 		}(ws)
 	}
 
+	// The work-stealing monitor cancels workers that fetch < 1 MiB within
+	// the grace period (slow/throttled). Under an aggregate --limit-rate
+	// every worker is intentionally capped well below that, so stealing
+	// would thrash: each large task gets stolen, re-queued, and re-downloaded
+	// forever. Stalled connections (0 bytes) are never stolen anyway, so
+	// rate-limited downloads skip the monitor entirely and rely on the
+	// idle-body timeout + transient retry path.
 	monitorCtx, stopMonitor := context.WithCancel(ctx)
 	var monitorWG sync.WaitGroup
-	monitorWG.Add(1)
-	go func() {
-		defer monitorWG.Done()
-		monitor(monitorCtx, states, queue)
-	}()
+	if d.rateLimit == nil {
+		monitorWG.Add(1)
+		go func() {
+			defer monitorWG.Done()
+			monitor(monitorCtx, states, queue)
+		}()
+	} else {
+		d.vlog("rate limited: work-stealing monitor disabled")
+	}
 
 	var progressC <-chan time.Time
 	if !d.quiet {

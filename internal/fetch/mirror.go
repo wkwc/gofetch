@@ -155,24 +155,24 @@ func parseUint(s string) (int64, error) {
 // defaultUserAgent is the User-Agent unless overridden via Options.
 const defaultUserAgent = "gofetch/1.0"
 
-// newRequest builds an HTTP request with gofetch's fixed headers: the
-// (possibly overridden) user agent, an explicit Accept-Encoding: identity
-// so a proxy can never inject compression that would desync Range offsets
-// or integrity checks (the transport already disables transparent gzip),
-// and any user-supplied custom headers. rangeHeader may be empty for
-// non-range requests.
+// newRequest builds an HTTP request with gofetch's fixed headers and any
+// user-supplied custom headers. User headers are applied first; the
+// correctness-critical ones (User-Agent, Accept-Encoding: identity, and
+// the task Range) are set last so a `-H` value can never override them —
+// a proxy-injected or user-set gzip would desync Range offsets and break
+// integrity verification.
 func (d *Downloader) newRequest(ctx context.Context, method, url, rangeHeader string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", d.userAgent)
-	req.Header.Set("Accept-Encoding", "identity")
 	for _, h := range d.headers {
 		if k, v, ok := strings.Cut(h, ":"); ok {
 			req.Header.Set(strings.TrimSpace(k), strings.TrimSpace(v))
 		}
 	}
+	req.Header.Set("User-Agent", d.userAgent)
+	req.Header.Set("Accept-Encoding", "identity")
 	if rangeHeader != "" {
 		req.Header.Set("Range", rangeHeader)
 	}
