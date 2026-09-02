@@ -292,13 +292,13 @@ committed as regression seeds (CI also runs a short fuzz smoke).
 Measurements on a Linux 16-core test box (loopback, fresh server per
 run, 64 MB):
 
-| Tool | Median (5 runs) |
+| Tool | Median (3 runs) |
 | ---- | --------------- |
-| `gofetch -q` | ~50-60 ms |
-| aria2c (`-x 16`) | ~220 ms |
-| aria2c (default 5 conns) | ~250 ms |
+| `gofetch -q` | ~105 ms |
+| aria2c (`-x 16`) | ~480 ms |
+| aria2c (default 5 conns) | ~550 ms |
 
-`gofetch` is ~4× faster than aria2c on this benchmark. The advantage
+`gofetch` is ~4-5× faster than aria2c on this benchmark. The advantage
 comes from:
 
 1. **Zero-copy writes.** Each HTTP read is performed directly into an `mmap(2)`'d slice of the output file. No intermediate buffer + memcpy.
