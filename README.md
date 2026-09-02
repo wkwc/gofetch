@@ -34,7 +34,7 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **Multiple URLs** | `gofetch URL1 URL2` | Download several URLs at once (with `-o`, into a directory) |
 | **Quiet** | `-q` | Suppress progress bar; print only filename on success |
 | **Verbose** | `-v` | Verbose logging to stderr (mirror selection, task starts, retries, chunk verification) |
-| **Hash** | `-h SPEC` | Verify integrity. Zero-config by default (auto-detects local sidecar); override with `sha256:hex`, `sha512:hex`, `auto`, or a sidecar path. **Note:** `-h` is the hash flag — use `-help` for help |
+| **Hash** | `-h SPEC` | Verify integrity. Zero-config by default (auto-detects local sidecar); override with `md5:hex`, `sha1:hex`, `sha256:hex`, `sha512:hex`, `auto`, or a sidecar path. **Note:** `-h` is the hash flag — use `-help` for help |
 | **No Resume** | `--no-resume` | Disable resume from `.gofetch.resume` (default: enabled) |
 | **Mirrors** | `-m URL1,URL2` | Comma-separated mirror URLs tried in order on failure |
 | **Headers** | `-H "Name: value"` | Send a custom header (repeatable; auth/cookies) |
