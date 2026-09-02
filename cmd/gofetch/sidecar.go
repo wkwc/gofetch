@@ -11,11 +11,11 @@ import (
 
 // resolveHash figures out the hash algorithm and expected hex from the -h flag.
 // Supports:
-//   - ""            → auto-detect a local <out>.sha256/.sha512 sidecar; no verification if none
-//   - "auto"        → local sidecar first, else fetch <url>.sha256 / <url>.sha512
+//   - ""            → auto-detect a local <out>.md5/.sha1/.sha256/.sha512 sidecar; no verification if none
+//   - "auto"        → local sidecar first, else fetch <url>.md5 / <url>.sha1 / <url>.sha256 / <url>.sha512
 //   - "sha256:hex"  → explicit algo + hex
 //   - "sha512:hex"  → explicit algo + hex
-//   - "hex..."      → bare hex, treated as sha256
+//   - "hex..."      → bare hex, inferred by length (32=md5, 40=sha1, 64=sha256, 128=sha512)
 //   - "/path/file"  → read sidecar file from local path
 //   - "http(s)://"  → fetch sidecar hash from a URL
 func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo, hashHex string, err error) {
@@ -40,12 +40,12 @@ func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo
 	return fetch.ParseHashFlag(flag)
 }
 
-// autoDetectLocalSidecar looks for <out>.sha256, <out>.sha512 (and the
+// autoDetectLocalSidecar looks for <out>.md5/.sha1/.sha256/.sha512 (and
 // *sum variants) next to the output file. This makes hash verification
 // work with zero configuration when a sidecar already sits beside the
 // download — the common case for mirrors that ship checksums.
 func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
-	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sha512sum"} {
+	for _, suffix := range []string{".sha256", ".sha512", ".sha1", ".md5", ".sha256sum", ".sha512sum", ".sha1sum", ".md5sum"} {
 		path := outPath + suffix
 		if _, statErr := os.Stat(path); statErr != nil {
 			continue
@@ -55,12 +55,12 @@ func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
 	return "", "", nil
 }
 
-// autoDetectRemoteSidecar fetches <url>.sha256 then <url>.sha512 sidecars.
+// autoDetectRemoteSidecar fetches <url>.md5/.sha1/.sha256/.sha512 sidecars.
 // A single SSRF-hardened client is reused across suffix attempts so the
 // transport and connection pool are created once, not per attempt.
 func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex string, err error) {
 	client := fetch.NewSafeClient(15 * time.Second)
-	for _, suffix := range []string{".sha256", ".sha512", ".sha256sum", ".sha512sum"} {
+	for _, suffix := range []string{".sha256", ".sha512", ".sha1", ".md5", ".sha256sum", ".sha512sum", ".sha1sum", ".md5sum"} {
 		sidecarURL := rawURL + suffix
 		algo, hex, e := fetch.FetchSidecarHash(ctx, client, sidecarURL)
 		if e == nil && hex != "" {

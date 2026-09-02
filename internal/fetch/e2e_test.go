@@ -3,6 +3,8 @@ package fetch
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -552,4 +554,13 @@ func TestEndToEndManifestCorruptChunkFails(t *testing.T) {
 	if err := d.Download(testCtx(t, 30*time.Second)); err == nil {
 		t.Fatal("expected download to fail on a corrupt manifest chunk, got nil")
 	}
+}
+
+// TestEndToEndWithMD5Verify verifies MD5-verified downloads work end to
+// end (the algorithm real dataset servers like Zenodo/4TU publish).
+func TestEndToEndWithMD5Verify(t *testing.T) {
+	payload := makePayload(512 * 1024)
+	m := md5.Sum(payload)
+	expected := hex.EncodeToString(m[:])
+	downloadAndVerify(t, payload, Options{HashAlgo: "md5", ExpectedHash: expected})
 }

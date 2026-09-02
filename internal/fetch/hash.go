@@ -1,6 +1,8 @@
 package fetch
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -16,10 +18,17 @@ import (
 const hashBufSize = bufSizeLarge
 
 // newHash returns a hash.Hash for the given algorithm name.
+// md5 and sha1 are supported for integrity verification of third-party
+// datasets (Zenodo/4TU/Planck publish them); they are not collision
+// resistant, so use sha256/sha512 when tamper resistance matters.
 func newHash(algo string) hash.Hash {
 	switch algo {
 	case "sha512":
 		return sha512.New()
+	case "sha1":
+		return sha1.New()
+	case "md5":
+		return md5.New()
 	default:
 		return sha256.New()
 	}
@@ -30,15 +39,19 @@ func hashSize(algo string) int {
 	switch algo {
 	case "sha512":
 		return sha512.Size
+	case "sha1":
+		return sha1.Size
+	case "md5":
+		return md5.Size
 	default:
 		return sha256.Size
 	}
 }
 
-// ParseHashFlag parses "-h sha256:abcdef..." or "-h sha512:abcdef...".
+// ParseHashFlag parses "-h sha256:abcdef...", "-h md5:...", etc.
 // Also accepts bare hex, inferring the algorithm from its length
-// (64 = sha256, 128 = sha512), consistent with sidecar inference.
-// Returns (algo, hex, error).
+// (32 = md5, 40 = sha1, 64 = sha256, 128 = sha512), consistent with
+// sidecar inference. Returns (algo, hex, error).
 func ParseHashFlag(s string) (algo, hexHash string, err error) {
 	if s == "" {
 		return "", "", nil
@@ -47,8 +60,10 @@ func ParseHashFlag(s string) (algo, hexHash string, err error) {
 	if idx := strings.IndexByte(s, ':'); idx > 0 {
 		a := strings.ToLower(s[:idx])
 		h := s[idx+1:]
-		if a != "sha256" && a != "sha512" {
-			return "", "", fmt.Errorf("unsupported hash algorithm %q (use sha256 or sha512)", a)
+		switch a {
+		case "sha256", "sha512", "sha1", "md5":
+		default:
+			return "", "", fmt.Errorf("unsupported hash algorithm %q (use sha256, sha512, sha1, or md5)", a)
 		}
 		if err := validateHexHash(h, a); err != nil {
 			return "", "", err
@@ -56,21 +71,15 @@ func ParseHashFlag(s string) (algo, hexHash string, err error) {
 		return a, h, nil
 	}
 	// Bare hex — infer the algorithm from the length.
-	switch len(s) {
-	case hashSize("sha256") * 2:
-		if err := validateHexHash(s, "sha256"); err != nil {
-			return "", "", err
+	for _, algo := range []string{"md5", "sha1", "sha256", "sha512"} {
+		if len(s) == hashSize(algo)*2 {
+			if err := validateHexHash(s, algo); err != nil {
+				return "", "", err
+			}
+			return algo, s, nil
 		}
-		return "sha256", s, nil
-	case hashSize("sha512") * 2:
-		if err := validateHexHash(s, "sha512"); err != nil {
-			return "", "", err
-		}
-		return "sha512", s, nil
-	default:
-		return "", "", fmt.Errorf("expected %d (sha256) or %d (sha512) hex characters, got %d",
-			hashSize("sha256")*2, hashSize("sha512")*2, len(s))
 	}
+	return "", "", fmt.Errorf("expected 32 (md5), 40 (sha1), 64 (sha256), or 128 (sha512) hex characters, got %d", len(s))
 }
 
 // validateHexHash checks that s is a valid hex string of the correct length.

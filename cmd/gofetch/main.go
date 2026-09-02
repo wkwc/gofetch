@@ -53,7 +53,7 @@ func run(args []string) int {
 		outPath     = fs.String("o", "", "output file path (default: basename of URL); an existing directory downloads into it")
 		quiet       = fs.Bool("q", false, "suppress progress output")
 		verbose     = fs.Bool("v", false, "verbose logging")
-		hashFlag    = fs.String("h", "", "verify integrity: auto-detects local sidecar, or sha256:hex / sha512:hex / path / auto")
+		hashFlag    = fs.String("h", "", "verify integrity: auto-detects local sidecar, or md5:hex / sha1:hex / sha256:hex / sha512:hex / path / auto")
 		noResume    = fs.Bool("no-resume", false, "disable resume (default: on)")
 		mirrorsFlag = fs.String("m", "", "comma-separated mirror URLs tried on failure (bare hostnames get https://)")
 		manifestOut = fs.String("manifest-out", "", "after download, write a per-chunk integrity manifest of the output to this path")

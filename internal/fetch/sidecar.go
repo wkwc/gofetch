@@ -16,8 +16,9 @@ import (
 //	<hash>  <filename>
 //	<hash>
 //
-// The algorithm is inferred from the hash length (64 = sha256, 128 = sha512)
-// or from the file extension (.sha256, .sha512). The hex is validated.
+// The algorithm is inferred from the hash length (32 = md5, 40 = sha1,
+// 64 = sha256, 128 = sha512) or from the file extension. The hex is
+// validated.
 func ParseSidecarContent(content, sourcePath string) (algo, hashHex string, err error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -33,21 +34,23 @@ func ParseSidecarContent(content, sourcePath string) (algo, hashHex string, err 
 		return "", "", fmt.Errorf("invalid hex in sidecar: %s", sourcePath)
 	}
 
-	switch len(hexHash) {
-	case hashSize("sha256") * 2:
-		return "sha256", hexHash, nil
-	case hashSize("sha512") * 2:
-		return "sha512", hexHash, nil
-	default:
-		// Fall back to the file extension.
-		switch {
-		case strings.HasSuffix(sourcePath, ".sha256"), strings.HasSuffix(sourcePath, ".sha256sum"):
-			return "sha256", hexHash, nil
-		case strings.HasSuffix(sourcePath, ".sha512"), strings.HasSuffix(sourcePath, ".sha512sum"):
-			return "sha512", hexHash, nil
+	for _, algo := range []string{"md5", "sha1", "sha256", "sha512"} {
+		if len(hexHash) == hashSize(algo)*2 {
+			return algo, hexHash, nil
 		}
-		return "", "", fmt.Errorf("cannot determine hash algorithm from sidecar (hex length %d): %s", len(hexHash), sourcePath)
 	}
+	// Fall back to the file extension.
+	switch {
+	case strings.HasSuffix(sourcePath, ".sha256"), strings.HasSuffix(sourcePath, ".sha256sum"):
+		return "sha256", hexHash, nil
+	case strings.HasSuffix(sourcePath, ".sha512"), strings.HasSuffix(sourcePath, ".sha512sum"):
+		return "sha512", hexHash, nil
+	case strings.HasSuffix(sourcePath, ".sha1"), strings.HasSuffix(sourcePath, ".sha1sum"):
+		return "sha1", hexHash, nil
+	case strings.HasSuffix(sourcePath, ".md5"), strings.HasSuffix(sourcePath, ".md5sum"):
+		return "md5", hexHash, nil
+	}
+	return "", "", fmt.Errorf("cannot determine hash algorithm from sidecar (hex length %d): %s", len(hexHash), sourcePath)
 }
 
 // IsValidHex reports whether s contains only ASCII hex digits.

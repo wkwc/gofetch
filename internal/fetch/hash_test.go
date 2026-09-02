@@ -76,6 +76,8 @@ func TestVerifyFileHash(t *testing.T) {
 func TestParseHashFlag(t *testing.T) {
 	sha256Hex := strings.Repeat("ab", 32) // 64 hex chars
 	sha512Hex := strings.Repeat("cd", 64) // 128 hex chars
+	sha1Hex := strings.Repeat("ef", 20)   // 40 hex chars
+	md5Hex := strings.Repeat("12", 16)    // 32 hex chars
 
 	tests := []struct {
 		name    string
@@ -87,13 +89,17 @@ func TestParseHashFlag(t *testing.T) {
 		{name: "empty", input: "", algo: "", hexHash: ""},
 		{name: "bare sha256 hex", input: sha256Hex, algo: "sha256", hexHash: sha256Hex},
 		{name: "bare sha512 hex", input: sha512Hex, algo: "sha512", hexHash: sha512Hex},
+		{name: "bare sha1 hex", input: sha1Hex, algo: "sha1", hexHash: sha1Hex},
+		{name: "bare md5 hex", input: md5Hex, algo: "md5", hexHash: md5Hex},
+		{name: "algo:hex md5", input: "md5:" + md5Hex, algo: "md5", hexHash: md5Hex},
+		{name: "algo:hex sha1", input: "sha1:" + sha1Hex, algo: "sha1", hexHash: sha1Hex},
 		{name: "algo:hex sha256", input: "sha256:" + sha256Hex, algo: "sha256", hexHash: sha256Hex},
 		{name: "algo:hex sha512", input: "sha512:" + sha512Hex, algo: "sha512", hexHash: sha512Hex},
 		{name: "uppercase algo", input: "SHA256:" + sha256Hex, algo: "sha256", hexHash: sha256Hex},
 		{name: "unsupported algo", input: "md5:" + sha256Hex, wantErr: true},
 		{name: "wrong length sha256", input: "abcd", wantErr: true},
 		{name: "invalid hex chars", input: "zzzz" + strings.Repeat("ab", 30), wantErr: true},
-		{name: "sha256 hex too short", input: strings.Repeat("ab", 16), wantErr: true},
+		{name: "invalid hex length (34)", input: strings.Repeat("ab", 17), wantErr: true},
 		{name: "wrong length for sha256 (too long)", input: strings.Repeat("ab", 48), wantErr: true},
 	}
 	for _, tt := range tests {

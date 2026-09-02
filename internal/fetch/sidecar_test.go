@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -51,13 +52,12 @@ func TestParseSidecarContent(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "wrong length hex for sha256",
-			content: "abcdef0123456789abcdef0123456789\n",
+			name:    "ambiguous length falls back to extension",
+			content: "abcdef0123456789\n",
 			source:  "file.sha256",
-			// 32 hex chars doesn't match sha256 (64) or sha512 (128),
-			// but ParseSidecarContent falls back to extension.
+			// 16 hex chars matches no known algo, so the extension decides.
 			algo: "sha256",
-			hex:  "abcdef0123456789abcdef0123456789",
+			hex:  "abcdef0123456789",
 		},
 	}
 	for _, tt := range tests {
@@ -124,5 +124,36 @@ func TestFetchSidecarHashTLS(t *testing.T) {
 	}
 	if algo != "sha256" || hex != hash {
 		t.Errorf("got %s:%s, want sha256:%s", algo, hex, hash)
+	}
+}
+
+func TestParseSidecarContentMD5SHA1(t *testing.T) {
+	cases := []struct {
+		hexLen int
+		algo   string
+	}{
+		{32, "md5"},
+		{40, "sha1"},
+		{64, "sha256"},
+		{128, "sha512"},
+	}
+	for _, tt := range cases {
+		hex := strings.Repeat("a", tt.hexLen)
+		algo, got, err := ParseSidecarContent(hex+"  f.bin\n", "f")
+		if err != nil {
+			t.Fatalf("len %d: %v", tt.hexLen, err)
+		}
+		if algo != tt.algo || got != hex {
+			t.Errorf("len %d: algo=%q hex-len=%d, want %q", tt.hexLen, algo, len(got), tt.algo)
+		}
+	}
+	// Extension fallback still works when the length is ambiguous... it is
+	// not; but a .md5 file with a short odd string falls back to extension.
+	algo, _, err := ParseSidecarContent("abcd\n", "f.md5")
+	if err != nil {
+		t.Fatalf("md5 extension fallback: %v", err)
+	}
+	if algo != "md5" {
+		t.Errorf("extension fallback algo = %q, want md5", algo)
 	}
 }

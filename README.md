@@ -180,12 +180,18 @@ The `-h` flag supports multiple formats:
 
 | Format | Example |
 |---|---|
-| *(default)* | No `-h` needed: a local `<output>.sha256`/`.sha512` sidecar is auto-detected next to the output file |
+| *(default)* | No `-h` needed: a local `<output>.md5`/`.sha1`/`.sha256`/`.sha512` sidecar is auto-detected next to the output file |
+| `md5:hex` | `gofetch -h md5:...` (Zenodo / 4TU / Planck datasets publish MD5) |
+| `sha1:hex` | `gofetch -h sha1:...` |
 | `sha256:hex` | `gofetch -h sha256:abc123...` |
 | `sha512:hex` | `gofetch -h sha512:abc123...` |
 | `auto` | local sidecar first, else fetches `URL.sha256`/`.sha512` sidecars (remote fetch requires HTTPS) |
-| bare hex (64 chars → sha256, 128 chars → sha512) | `gofetch -h abc123...` |
+| bare hex (32 → md5, 40 → sha1, 64 → sha256, 128 → sha512) | `gofetch -h abc123...` |
 | local sidecar file | `gofetch -h /path/file.sha256 https://...` |
+
+MD5 and SHA-1 are supported for **integrity verification** of third-party
+dataset files (the algorithms those publishers ship); they are not
+collision-resistant, so prefer sha256/sha512 when tamper resistance matters.
 
 Integrity verification is zero-config when a checksum sidecar already sits
 beside the output (the common case for mirrors that ship `.sha256`/`.sha512`
@@ -193,7 +199,8 @@ files) — `gofetch` finds and uses it automatically. Explicit `-h` values
 override auto-detection.
 
 Sidecar files are parsed in common formats: `<hash> [filename]` or just `<hash>`.
-Algorithm is inferred from hash length (64 = sha256, 128 = sha512) or file extension.
+Algorithm is inferred from hash length (32 = md5, 40 = sha1, 64 = sha256,
+128 = sha512) or file extension.
 
 For extra assurance, a manifest file (`<output>.gofetch.manifest`) can be created
 alongside the download containing per-chunk SHA-256 hashes. If present, gofetch
@@ -288,6 +295,18 @@ flags, manifest JSON) and the range algebra (`splitRange`, `uncompleted`,
 `dedupTasks`). Their seed corpora run as normal unit tests; interesting inputs
 discovered during fuzzing are saved under `internal/fetch/testdata/fuzz/` and
 committed as regression seeds (CI also runs a short fuzz smoke).
+
+## Smoke test
+
+```bash
+./scripts/smoke.sh                         # full CLI surface vs local benchserver
+./scripts/smoke.sh https://example.com/f.bin  # or any real URL
+```
+
+A black-box check that exercises every flag and asserts exit codes (0/1/2/130),
+stdout/stderr separation, sidecar auto-detection, mirror fallback, rate
+limiting, manifest output, `--no-clobber`, and that Ctrl-C leaves a resumable
+partial file. Runs in CI on every push.
 
 Measurements on a Linux 16-core test box (loopback, fresh server per
 run, 64 MB):
