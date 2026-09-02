@@ -19,15 +19,10 @@ import (
 // Never enable this for the CLI entrypoint.
 var AllowLoopbackDial bool
 
-// HostIsPrivate reports whether hostname resolves to a private, loopback,
-// link-local, multicast, or unspecified IP. DNS failure → true (fail closed).
-// Loopback is treated as private unless AllowLoopbackDial is set (tests).
-func HostIsPrivate(hostname string) bool {
-	return hostIsPrivate(context.Background(), hostname)
-}
-
-// HostIsPrivateContext is HostIsPrivate with a caller-provided context so
-// DNS lookups honor deadlines and cancellation (used during redirects).
+// HostIsPrivateContext reports whether hostname resolves to a private,
+// loopback, link-local, multicast, or unspecified IP. DNS failure → true
+// (fail closed). Loopback is treated as private unless AllowLoopbackDial
+// is set (tests). ctx bounds the DNS lookup (deadlines/cancellation).
 func HostIsPrivateContext(ctx context.Context, hostname string) bool {
 	return hostIsPrivate(ctx, hostname)
 }

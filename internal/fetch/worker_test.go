@@ -109,6 +109,23 @@ func TestParseRetryAfter(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("http-date in future", func(t *testing.T) {
+		when := time.Now().Add(30 * time.Second).UTC()
+		h := http.Header{"Retry-After": []string{when.Format(http.TimeFormat)}}
+		got := parseRetryAfter(h)
+		if got <= 25*time.Second || got > 35*time.Second {
+			t.Errorf("parseRetryAfter(http-date) = %v, want ~30s", got)
+		}
+	})
+
+	t.Run("http-date in past", func(t *testing.T) {
+		when := time.Now().Add(-time.Hour).UTC()
+		h := http.Header{"Retry-After": []string{when.Format(http.TimeFormat)}}
+		if got := parseRetryAfter(h); got != retryAfterDefault {
+			t.Errorf("parseRetryAfter(past http-date) = %v, want default", got)
+		}
+	})
 }
 
 func TestSleepCtx(t *testing.T) {

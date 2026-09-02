@@ -26,6 +26,9 @@ func stderrIsTTY() bool {
 	return stderrTTYVal
 }
 
+// HumanBytes returns a short IEC-formatted byte count.
+func HumanBytes(n int64) string { return humanBytes(n) }
+
 // humanBytes returns a short IEC-formatted byte count.
 func humanBytes(n int64) string {
 	const k = 1024

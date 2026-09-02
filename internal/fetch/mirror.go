@@ -112,7 +112,9 @@ func httpError(method, url string, code int) error {
 	return fmt.Errorf("%s %s: status %d", method, url, code)
 }
 
-// parseContentRange parses "bytes START-END/TOTAL".
+// parseContentRange parses "bytes START-END/TOTAL". Returns ok=false for
+// malformed input, including inverted ranges (START > END) which no
+// well-behaved server sends.
 func parseContentRange(v string) (start, end, total int64, ok bool) {
 	if !strings.HasPrefix(v, "bytes ") {
 		return 0, 0, 0, false
@@ -126,7 +128,7 @@ func parseContentRange(v string) (start, end, total int64, ok bool) {
 	start, err1 := parseUint(rest[:dash])
 	end, err2 := parseUint(rest[dash+1 : slash])
 	total, err3 := parseUint(rest[slash+1:])
-	if err1 != nil || err2 != nil || err3 != nil {
+	if err1 != nil || err2 != nil || err3 != nil || end < start {
 		return 0, 0, 0, false
 	}
 	return start, end, total, true

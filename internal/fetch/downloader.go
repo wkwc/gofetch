@@ -39,6 +39,11 @@ type Downloader struct {
 	proxyURL  string
 	rateLimit *rateLimiter
 
+	// workersSet/bufSet track explicit overrides so applyProbe's Retune
+	// leaves user-provided values alone.
+	workersSet bool
+	bufSet     bool
+
 	lastResumeSaveMu sync.Mutex
 	lastResumeSave   time.Time
 	retryMu          sync.Mutex
@@ -70,11 +75,22 @@ type Options struct {
 	Proxy string
 	// UserAgent overrides the default gofetch User-Agent header.
 	UserAgent string
+	// Workers and BufSize are optional escape hatches. When > 0 they
+	// override the auto-tuned values; 0 keeps auto-tuning.
+	Workers int
+	BufSize int
 }
 
 // NewDownloader constructs a Downloader with auto-configured defaults.
 func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	ac := AutoConfigure(0)
+	// Optional escape hatches override the auto-tuned values.
+	if opt.Workers > 0 {
+		ac.Workers = opt.Workers
+	}
+	if opt.BufSize > 0 {
+		ac.BufSize = opt.BufSize
+	}
 	ua := opt.UserAgent
 	if ua == "" {
 		ua = defaultUserAgent
@@ -85,6 +101,8 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		outFile:       outPath,
 		workerCount:   ac.Workers,
 		bufSize:       ac.BufSize,
+		workersSet:    opt.Workers > 0,
+		bufSet:        opt.BufSize > 0,
 		resumeEnabled: !opt.NoResume,
 		quiet:         opt.Quiet,
 		verbose:       opt.Verbose,
@@ -116,6 +134,35 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 // smallFileThreshold is the file size below which parallel range downloads
 // don't help: startup overhead dominates. Use single-stream instead.
 const smallFileThreshold = 64 * 1024
+
+// ProbeInfo describes what a download from a URL would do, without
+// fetching the body. Reported by ProbeURL.
+type ProbeInfo struct {
+	URL            string
+	Total          int64
+	SupportsRanges bool
+	Workers        int
+	BufSize        int
+}
+
+// ProbeURL probes url (HEAD, falling back to a 1-byte range GET) and
+// reports the announced size, range support, and the auto-tuned
+// concurrency a download would use — without writing anything to disk.
+func ProbeURL(ctx context.Context, rawURL string) (ProbeInfo, error) {
+	d := NewDownloader(rawURL, "", Options{})
+	info, err := d.probeURL(ctx, rawURL)
+	if err != nil {
+		return ProbeInfo{}, err
+	}
+	d.applyProbe(info)
+	return ProbeInfo{
+		URL:            rawURL,
+		Total:          info.total,
+		SupportsRanges: info.supportsRanges,
+		Workers:        d.workerCount,
+		BufSize:        d.bufSize,
+	}, nil
+}
 
 // Download attempts each URL in order, falling over to mirrors on error.
 // On success it calls finalize with the active progress tracker and file
@@ -214,8 +261,12 @@ func (d *Downloader) applyProbe(info probeInfo) {
 
 	d.totalSize = info.total
 	d.autoConfig.Retune(info.total)
-	d.workerCount = d.autoConfig.Workers
-	d.bufSize = d.autoConfig.BufSize
+	if !d.workersSet {
+		d.workerCount = d.autoConfig.Workers
+	}
+	if !d.bufSet {
+		d.bufSize = d.autoConfig.BufSize
+	}
 	d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
 }
 
