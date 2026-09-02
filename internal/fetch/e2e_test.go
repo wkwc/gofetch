@@ -17,82 +17,21 @@ import (
 // TestEndToEndDownload verifies the basic happy path: 2 MB file,
 // range-supported server. The output must match the server's payload bit-for-bit.
 func TestEndToEndDownload(t *testing.T) {
-	payload := makePayload(2 * 1024 * 1024)
-	srv := newRangeServer(t, payload, nil)
-
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
-
-	d := NewDownloader(srv.URL, outFile, Options{})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := d.Download(ctx); err != nil {
-		t.Fatalf("Download: %v", err)
-	}
-
-	got, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if len(got) != len(payload) {
-		t.Fatalf("size = %d, want %d", len(got), len(payload))
-	}
-	if sha256Hex(got) != sha256Hex(payload) {
-		t.Fatal("content mismatch")
-	}
+	downloadAndVerify(t, makePayload(2*1024*1024), Options{})
 }
 
 // TestEndToEndConcurrentWorkersCleanFile stress-tests the auto-configured
 // worker count on a 4 MB file. Even under contention, the final bytes
 // must match the source — no torn writes, no off-by-one.
 func TestEndToEndConcurrentWorkersCleanFile(t *testing.T) {
-	payload := makePayload(4 * 1024 * 1024)
-	srv := newRangeServer(t, payload, nil)
-
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
-
-	d := NewDownloader(srv.URL, outFile, Options{})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := d.Download(ctx); err != nil {
-		t.Fatalf("Download: %v", err)
-	}
-
-	got, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if sha256Hex(got) != sha256Hex(payload) {
-		t.Fatal("content mismatch under concurrency stress")
-	}
+	downloadAndVerify(t, makePayload(4*1024*1024), Options{})
 }
 
 // TestEndToEndWithHashVerify passes when the post-download SHA-256
 // matches the expected value. The negative case is in TestEndToEndWithBadHash.
 func TestEndToEndWithHashVerify(t *testing.T) {
 	payload := makePayload(1 * 1024 * 1024)
-	expected := sha256Hex(payload)
-	srv := newRangeServer(t, payload, nil)
-
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
-
-	d := NewDownloader(srv.URL, outFile, Options{
-		HashAlgo:     "sha256",
-		ExpectedHash: expected,
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := d.Download(ctx); err != nil {
-		t.Fatalf("Download: %v", err)
-	}
+	downloadAndVerify(t, payload, Options{HashAlgo: "sha256", ExpectedHash: sha256Hex(payload)})
 }
 
 // TestEndToEndWithBadHash fails the verification path: known-bad
@@ -100,21 +39,12 @@ func TestEndToEndWithHashVerify(t *testing.T) {
 func TestEndToEndWithBadHash(t *testing.T) {
 	payload := makePayload(1 * 1024 * 1024)
 	srv := newRangeServer(t, payload, nil)
-
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
-
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 	d := NewDownloader(srv.URL, outFile, Options{
-		HashAlgo: "sha256",
-		ExpectedHash: "deadbeefdeadbeefdeadbeefdeadbeef" +
-			"deadbeefdeadbeefdeadbeefdeadbeef",
+		HashAlgo:     "sha256",
+		ExpectedHash: "deadbeefdeadbeefdeadbeefdeadbeef" + "deadbeefdeadbeefdeadbeefdeadbeef",
 	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	err := d.Download(ctx)
-	if err == nil {
+	if err := d.Download(testCtx(t, 30*time.Second)); err == nil {
 		t.Fatal("expected hash mismatch error, got nil")
 	}
 }
@@ -122,23 +52,7 @@ func TestEndToEndWithBadHash(t *testing.T) {
 // TestEndToEndWithSHA512Verify verifies SHA-512 hashing works.
 func TestEndToEndWithSHA512Verify(t *testing.T) {
 	payload := makePayload(512 * 1024)
-	expected := sha512Hex(payload)
-	srv := newRangeServer(t, payload, nil)
-
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
-
-	d := NewDownloader(srv.URL, outFile, Options{
-		HashAlgo:     "sha512",
-		ExpectedHash: expected,
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := d.Download(ctx); err != nil {
-		t.Fatalf("Download: %v", err)
-	}
+	downloadAndVerify(t, payload, Options{HashAlgo: "sha512", ExpectedHash: sha512Hex(payload)})
 }
 
 // TestSidecarHashParsing exercises the hash flag parsing logic that
@@ -162,29 +76,23 @@ func TestSidecarHashParsing(t *testing.T) {
 
 // TestEndToEndResume verifies that a partial download can be resumed
 // and completes with correct content. The test kills the download
-// mid-way by cancelling the context, then restarts.
+// mid-way by cancelling the context, then restarts on the same file.
 func TestEndToEndResume(t *testing.T) {
 	payload := makePayload(8 * 1024 * 1024)
 	srv := newRangeServer(t, payload, nil)
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
-
-	// First attempt: cancel after a short time
+	// First attempt: cancel after a short time.
 	d1 := NewDownloader(srv.URL, outFile, Options{})
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	_ = d1.Download(ctx1)
 	cancel1()
 
-	// Resume: same URL, same output file
+	// Resume: same URL, same output file.
 	d2 := NewDownloader(srv.URL, outFile, Options{})
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel2()
-
-	if err := d2.Download(ctx2); err != nil {
+	if err := d2.Download(testCtx(t, 30*time.Second)); err != nil {
 		t.Fatalf("Resume download: %v", err)
 	}
-
 	got, err := os.ReadFile(outFile)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -194,34 +102,27 @@ func TestEndToEndResume(t *testing.T) {
 	}
 }
 
-// TestEndToEndNoResume verifies --no-resume downloads fresh.
+// TestEndToEndNoResume verifies --no-resume downloads fresh, overwriting
+// a file that a previous run completed (and its resume sidecar).
 func TestEndToEndNoResume(t *testing.T) {
 	payload := makePayload(4 * 1024 * 1024)
 	srv := newRangeServer(t, payload, nil)
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
-
-	// First download
+	// First download (completes, clearing any sidecar).
 	d1 := NewDownloader(srv.URL, outFile, Options{})
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
-	if err := d1.Download(ctx1); err != nil {
+	if err := d1.Download(testCtx(t, 30*time.Second)); err != nil {
 		t.Fatalf("First download: %v", err)
 	}
-	cancel1()
 
-	// Second download with --no-resume should overwrite, not resume
+	// Second download with --no-resume should overwrite, not resume.
 	d2 := NewDownloader(srv.URL, outFile, Options{NoResume: true})
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel2()
-
-	if err := d2.Download(ctx2); err != nil {
+	if err := d2.Download(testCtx(t, 30*time.Second)); err != nil {
 		t.Fatalf("No-resume download: %v", err)
 	}
-
 	got, err := os.ReadFile(outFile)
 	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+		t.Fatal(err)
 	}
 	if sha256Hex(got) != sha256Hex(payload) {
 		t.Fatal("no-resume content mismatch")
@@ -239,11 +140,7 @@ func TestProbeHeadUnsupported(t *testing.T) {
 	})
 
 	d := NewDownloader(srv.URL, "test.bin", Options{})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	info, err := d.probeURL(ctx, srv.URL)
+	info, err := d.probeURL(testCtx(t, 10*time.Second), srv.URL)
 	if err != nil {
 		t.Fatalf("probeURL: %v", err)
 	}
@@ -263,11 +160,7 @@ func TestProbeServerError(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	d := NewDownloader(srv.URL, "test.bin", Options{})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	_, err := d.probeURL(ctx, srv.URL)
+	_, err := d.probeURL(testCtx(t, 10*time.Second), srv.URL)
 	if err == nil {
 		t.Error("expected probe error for 500, got nil")
 	}
@@ -286,10 +179,7 @@ func TestProbeHeadNoContentLength(t *testing.T) {
 	})
 
 	d := NewDownloader(srv.URL, "test.bin", Options{})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	info, err := d.probeURL(ctx, srv.URL)
+	info, err := d.probeURL(testCtx(t, 10*time.Second), srv.URL)
 	if err != nil {
 		t.Fatalf("probeURL: %v", err)
 	}
@@ -305,8 +195,7 @@ func TestProbeHeadNoContentLength(t *testing.T) {
 func TestQuietModeStillVerifiesHash(t *testing.T) {
 	payload := makePayload(256 * 1024)
 	srv := newRangeServer(t, payload, nil)
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 
 	// Bad hash must fail even in quiet mode.
 	d := NewDownloader(srv.URL, outFile, Options{
@@ -314,9 +203,7 @@ func TestQuietModeStillVerifiesHash(t *testing.T) {
 		HashAlgo:     "sha256",
 		ExpectedHash: "0000000000000000000000000000000000000000000000000000000000000000",
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := d.Download(ctx); err == nil {
+	if err := d.Download(testCtx(t, 30*time.Second)); err == nil {
 		t.Fatal("expected hash mismatch error in quiet mode")
 	}
 
@@ -327,7 +214,7 @@ func TestQuietModeStillVerifiesHash(t *testing.T) {
 		HashAlgo:     "sha256",
 		ExpectedHash: sha256Hex(payload),
 	})
-	if err := d2.Download(ctx); err != nil {
+	if err := d2.Download(testCtx(t, 30*time.Second)); err != nil {
 		t.Fatalf("quiet+good hash: %v", err)
 	}
 	got, err := os.ReadFile(outFile)
@@ -352,13 +239,9 @@ func TestShortRangeBodyErrors(t *testing.T) {
 		},
 	})
 
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 	d := NewDownloader(srv.URL, outFile, Options{NoResume: true, Quiet: true})
-	// Force single worker path size still uses ranges for 64KiB (threshold is 64KiB exclusive).
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err := d.Download(ctx)
+	err := d.Download(testCtx(t, 10*time.Second))
 	if err == nil {
 		t.Fatal("expected short-body error, got success")
 	}
@@ -405,13 +288,10 @@ func TestMidRangeEOFRetriesRecovery(t *testing.T) {
 		},
 	})
 
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 	opt := Options{NoResume: true, Quiet: true, HashAlgo: "sha256", ExpectedHash: sha256Hex(payload)}
 	d := NewDownloader(srv.URL, outFile, opt)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := d.Download(ctx); err != nil {
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
 		t.Fatalf("expected recovery after mid-range EOF retry, got error: %v", err)
 	}
 	got, err := os.ReadFile(outFile)
@@ -451,12 +331,9 @@ func TestRange200FallsBackToSingle(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 	d := NewDownloader(srv.URL, outFile, Options{NoResume: true, Quiet: true})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := d.Download(ctx); err != nil {
+	if err := d.Download(testCtx(t, 15*time.Second)); err != nil {
 		t.Fatalf("expected single-stream fallback success, got: %v", err)
 	}
 	got, err := os.ReadFile(outFile)
@@ -489,12 +366,9 @@ func TestUnknownSizeSingleStream(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 	d := NewDownloader(srv.URL, outFile, Options{Quiet: true, NoResume: true})
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := d.Download(ctx); err != nil {
+	if err := d.Download(testCtx(t, 15*time.Second)); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	if d.totalSize != int64(len(payload)) {
@@ -539,12 +413,9 @@ func TestRateLimitedNoThrash(t *testing.T) {
 		},
 	})
 
-	dir := t.TempDir()
-	outFile := filepath.Join(dir, "out.bin")
+	outFile := filepath.Join(t.TempDir(), "out.bin")
 	d := NewDownloader(srv.URL, outFile, Options{RateLimit: rate, Quiet: true, NoResume: true})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := d.Download(ctx); err != nil {
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 
@@ -564,5 +435,56 @@ func TestRateLimitedNoThrash(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+// TestProbeURL verifies --info's probe mode reports size/range support and
+// the auto-tuned concurrency without downloading anything.
+func TestProbeURL(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+	srv := newRangeServer(t, payload, nil)
+
+	p, err := ProbeURL(testCtx(t, 10*time.Second), srv.URL)
+	if err != nil {
+		t.Fatalf("ProbeURL: %v", err)
+	}
+	if p.Total != int64(len(payload)) {
+		t.Errorf("Total = %d, want %d", p.Total, len(payload))
+	}
+	if !p.SupportsRanges {
+		t.Error("expected SupportsRanges")
+	}
+	if p.Workers < 1 || p.BufSize < 1 {
+		t.Errorf("auto config missing: workers=%d buf=%d", p.Workers, p.BufSize)
+	}
+}
+
+// TestWorkersBufOverride verifies the -x/--buf-size escape hatches: the
+// overrides survive applyProbe's auto-retune and the download still works.
+func TestWorkersBufOverride(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+	srv := newRangeServer(t, payload, nil)
+	outFile := filepath.Join(t.TempDir(), "out.bin")
+
+	d := NewDownloader(srv.URL, outFile, Options{Workers: 2, BufSize: 32 * 1024})
+	if d.workerCount != 2 {
+		t.Errorf("workerCount = %d, want 2", d.workerCount)
+	}
+	if d.bufSize != 32*1024 {
+		t.Errorf("bufSize = %d, want 32768", d.bufSize)
+	}
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	// applyProbe must not clobber the overrides.
+	if d.workerCount != 2 || d.bufSize != 32*1024 {
+		t.Errorf("overrides clobbered by Retune: workers=%d buf=%d", d.workerCount, d.bufSize)
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("content mismatch")
 	}
 }

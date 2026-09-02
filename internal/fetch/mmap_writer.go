@@ -56,9 +56,10 @@ type mmapWriterBytes interface {
 // mmapWriter writes to a memory-mapped file. This is the fast path:
 // bytes flow into the page cache via memcpy with no per-buffer syscall.
 type mmapWriter struct {
-	fd   *os.File
-	data []byte
-	size int64
+	fd     *os.File
+	data   []byte
+	size   int64
+	synced bool // set by Sync() so Close() skips a redundant fsync
 }
 
 // newMmapWriter creates and mmaps the output file in RW shared mode.
@@ -104,14 +105,23 @@ func (m *mmapWriter) Bytes() []byte { return m.data }
 // Sync flushes dirty mmap pages via the underlying fd. Note: mmap MAP_SHARED
 // pages are also auto-flushed to the page cache on memcpy; Sync() ensures
 // page cache contents reach the disk, surviving process crashes.
-func (m *mmapWriter) Sync() error { return m.fd.Sync() }
+func (m *mmapWriter) Sync() error {
+	m.synced = true
+	return m.fd.Sync()
+}
 
-// Close unmaps + closes the fd. Safe to call multiple times.
+// Close unmaps + closes the fd. Safe to call multiple times. On the
+// finalize success path Sync() already ran, so the redundant second
+// fsync is skipped; when Close is reached without a prior Sync (error
+// paths) it fsyncs once to keep the write durable.
 func (m *mmapWriter) Close() error {
 	if m.data == nil {
 		return nil
 	}
-	syncErr := m.fd.Sync()
+	var syncErr error
+	if !m.synced {
+		syncErr = m.fd.Sync()
+	}
 	unmapErr := munmapSys(m.data)
 	m.data = nil
 	closeErr := m.fd.Close()

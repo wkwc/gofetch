@@ -46,6 +46,9 @@ type idleBody struct {
 	started bool
 	reqCh   chan readReq
 	stopCh  chan struct{}
+	// drainTimer bounds how long forceClose waits for a mid-flight helper
+	// read after ctx/timer cancellation, so no per-Read time.After churn.
+	drainTimer *time.Timer
 }
 
 type readReq struct {
@@ -111,6 +114,8 @@ func newIdleBody(ctx context.Context, r io.Reader, idle time.Duration) *idleBody
 		b.timer.Reset(idle)
 		b.reqCh = make(chan readReq, 1)
 		b.stopCh = make(chan struct{})
+		b.drainTimer = time.NewTimer(2 * time.Second)
+		stopDrain(b.drainTimer)
 	}
 	return b
 }
@@ -199,18 +204,14 @@ func (b *idleBody) Read(p []byte) (int, error) {
 	select {
 	case <-b.ctx.Done():
 		b.forceClose()
-		select {
-		case <-resCh:
-			releaseBuf(tmp)
-		case <-time.After(2 * time.Second):
+		if !b.drainResult(resCh, tmp) {
+			return 0, b.ctx.Err()
 		}
 		return 0, b.ctx.Err()
 	case <-b.timer.C:
 		b.forceClose()
-		select {
-		case <-resCh:
-			releaseBuf(tmp)
-		case <-time.After(2 * time.Second):
+		if !b.drainResult(resCh, tmp) {
+			return 0, errBodyIdle
 		}
 		return 0, errBodyIdle
 	case res := <-resCh:
@@ -222,6 +223,23 @@ func (b *idleBody) Read(p []byte) (int, error) {
 	}
 }
 
+// drainResult waits up to 2s (reusing b.drainTimer) for the helper
+// goroutine's response to a cancelled read, then releases tmp. It
+// returns false when the timeout won, meaning the caller should stop
+// the read rather than trust resCh.
+func (b *idleBody) drainResult(resCh chan readResult, tmp []byte) bool {
+	stopDrain(b.drainTimer)
+	b.drainTimer.Reset(2 * time.Second)
+	select {
+	case <-resCh:
+		releaseBuf(tmp)
+		return true
+	case <-b.drainTimer.C:
+		releaseBuf(tmp)
+		return false
+	}
+}
+
 func (b *idleBody) Close() error {
 	if b.useGo {
 		b.mu.Lock()
@@ -230,6 +248,9 @@ func (b *idleBody) Close() error {
 	b.forceClose()
 	if b.timer != nil {
 		b.timer.Stop()
+	}
+	if b.drainTimer != nil {
+		b.drainTimer.Stop()
 	}
 	return b.closeErr
 }

@@ -1,7 +1,6 @@
 package fetch
 
 import (
-	"context"
 	"net"
 	"strings"
 	"testing"
@@ -14,8 +13,7 @@ func TestDialContextSafeBlocksPrivate(t *testing.T) {
 	AllowLoopbackDial = false
 	t.Cleanup(func() { AllowLoopbackDial = prev })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	ctx := testCtx(t, 2*time.Second)
 
 	_, err := DialContextSafe(ctx, "tcp", net.JoinHostPort("127.0.0.1", "1"))
 	if err == nil {
@@ -40,8 +38,7 @@ func TestDialContextAllowPrivateAcceptsLoopback(t *testing.T) {
 
 	// Connection will fail (nothing listening on :1) but the error must
 	// not be the private-IP reject.
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
+	ctx := testCtx(t, 500*time.Millisecond)
 	_, err := DialContextAllowPrivate(ctx, "tcp", net.JoinHostPort("127.0.0.1", "1"))
 	if err == nil {
 		return
@@ -105,8 +102,7 @@ func TestAllowProxyHostDialAuto(t *testing.T) {
 	t.Cleanup(func() { AllowLoopbackDial = prev })
 
 	allowProxyHost("127.0.0.1")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
+	ctx := testCtx(t, 500*time.Millisecond)
 	_, err := DialContextAuto(ctx, "tcp", net.JoinHostPort("127.0.0.1", "1"))
 	if err == nil {
 		return

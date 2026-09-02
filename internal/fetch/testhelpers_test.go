@@ -1,6 +1,8 @@
 package fetch
 
 import (
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -8,7 +10,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func init() {
@@ -114,4 +119,33 @@ func parseRangeHeader(h string, size int) (start, end int64, ok bool) {
 		return 0, 0, false
 	}
 	return s, e, true
+}
+
+// testCtx returns a context canceled by t.Cleanup after the timeout.
+func testCtx(t testing.TB, d time.Duration) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// downloadAndVerify downloads payload from a fresh range server into a
+// temp file with the given options and asserts byte equality. Returns the
+// output path for tests that need to inspect it further.
+func downloadAndVerify(t *testing.T, payload []byte, opt Options) string {
+	t.Helper()
+	srv := newRangeServer(t, payload, nil)
+	out := filepath.Join(t.TempDir(), "out.bin")
+	d := NewDownloader(srv.URL, out, opt)
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+	return out
 }

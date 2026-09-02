@@ -1,7 +1,6 @@
 package fetch
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -41,11 +40,9 @@ func BenchmarkParallelDownload(b *testing.B) {
 	for n := 0; n < b.N; n++ {
 		out := filepath.Join(dir, "out.bin")
 		d := NewDownloader(srv.URL, out, Options{Quiet: true, NoResume: true})
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := d.Download(ctx); err != nil {
+		if err := d.Download(testCtx(b, 30*time.Second)); err != nil {
 			b.Fatal(err)
 		}
-		cancel()
 	}
 	b.SetBytes(int64(size))
 }
