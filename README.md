@@ -185,7 +185,7 @@ The `-h` flag supports multiple formats:
 | `sha1:hex` | `gofetch -h sha1:...` |
 | `sha256:hex` | `gofetch -h sha256:abc123...` |
 | `sha512:hex` | `gofetch -h sha512:abc123...` |
-| `auto` | local sidecar first, else fetches `URL.sha256`/`.sha512` sidecars (remote fetch requires HTTPS) |
+| `auto` | local sidecar first, else fetches `URL.md5`/`URL.sha1`/`URL.sha256`/`URL.sha512` sidecars (scheme matches the primary URL; SSRF host guard applies) |
 | bare hex (32 → md5, 40 → sha1, 64 → sha256, 128 → sha512) | `gofetch -h abc123...` |
 | local sidecar file | `gofetch -h /path/file.sha256 https://...` |
 

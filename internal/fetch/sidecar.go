@@ -83,15 +83,20 @@ func ReadSidecarFile(path string) (algo, hashHex string, err error) {
 }
 
 // FetchSidecarHash fetches a sidecar hash file from a URL and parses it.
-// Requires HTTPS and rejects private/internal IP ranges to prevent SSRF.
+// The scheme is the caller's choice: `-h auto` derives it from the
+// primary URL, so an http primary gets an http sidecar (the download is
+// already unauthenticated; the sidecar adds no new exposure) and an https
+// primary stays https. The SSRF host check applies regardless of scheme —
+// private/loopback/link-local hosts are always rejected.
 func FetchSidecarHash(ctx context.Context, client *http.Client, sidecarURL string) (algo, hashHex string, err error) {
 	parsed, err := url.Parse(sidecarURL)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid sidecar URL: %w", err)
 	}
-	// SSRF protection: require HTTPS and reject private/internal IPs.
-	if parsed.Scheme != "https" {
-		return "", "", fmt.Errorf("sidecar URL must use HTTPS")
+	// SSRF protection: reject private/internal IPs (scheme checked by the
+	// caller via URL construction or an explicit -h URL).
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", "", fmt.Errorf("sidecar URL must use http or https")
 	}
 	if HostIsPrivateContext(ctx, parsed.Hostname()) {
 		return "", "", fmt.Errorf("sidecar URL host %q resolves to a private/internal address (SSRF guard)", parsed.Hostname())

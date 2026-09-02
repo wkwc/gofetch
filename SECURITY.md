@@ -9,6 +9,7 @@ gofetch is a **client CLI** that fetches attacker- or operator-supplied URLs ont
 | SSRF to link-local / private IPs | Dial-time IP checks; redirect policy; fail-closed DNS errors |
 | Path traversal via `-o` | Caller-controlled path (document; do not run as root on untrusted args) |
 | Partial writes / resume corruption | Resume sidecars + optional hash verification (`-h`) |
+| Tampered remote sidecar hash | `-h auto` fetches the sidecar with the **same scheme as the primary URL**: an https primary only ever trusts https sidecars; an http primary (already unauthenticated) accepts the http checksum the publisher ships — never stronger than the download itself. SSRF host filtering applies regardless of scheme |
 | Supply chain of gofetch itself | Signed GitHub releases + attestations |
 
 ## Non-goals

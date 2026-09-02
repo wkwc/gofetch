@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -576,5 +578,56 @@ func TestRunInfoJSONError(t *testing.T) {
 	}
 	if got.Error == "" {
 		t.Error("expected non-empty error field")
+	}
+}
+
+func TestRunHashAutoRemoteMD5(t *testing.T) {
+	// A dataset server that publishes an .md5 sidecar (Zenodo/4TU style):
+	// `-h auto` must fetch it remotely and verify, with zero local sidecar.
+	payload := bytes.Repeat([]byte("physics-data-"), 64*1024) // ~704 KiB
+	md5hex := md5.Sum(payload)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/file.bin":
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+		case "/file.bin.md5":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(hex.EncodeToString(md5hex[:]) + "  file.bin\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "file.bin")
+	code := run([]string{"--allow-loopback", "-q", "-h", "auto", "-o", out, srv.URL + "/file.bin"})
+	if code != 0 {
+		t.Fatalf("run(-h auto) = %d, want 0 (remote md5 sidecar verified)", code)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+
+	// A wrong remote md5 must fail the download.
+	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/file.bin" {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("00000000000000000000000000000000  file.bin\n"))
+	}))
+	t.Cleanup(badSrv.Close)
+	badOut := filepath.Join(t.TempDir(), "file.bin")
+	if code := run([]string{"--allow-loopback", "-q", "-h", "auto", "-o", badOut, badSrv.URL + "/file.bin"}); code != 1 {
+		t.Errorf("run(-h auto, wrong remote md5) = %d, want 1", code)
 	}
 }

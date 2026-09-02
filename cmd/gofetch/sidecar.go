@@ -56,11 +56,13 @@ func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
 }
 
 // autoDetectRemoteSidecar fetches <url>.md5/.sha1/.sha256/.sha512 sidecars.
-// A single SSRF-hardened client is reused across suffix attempts so the
-// transport and connection pool are created once, not per attempt.
+// The sidecar scheme matches the primary URL (http primary → http sidecar),
+// so datasets that ship MD5 checksums over plain http work too. A single
+// SSRF-hardened client is reused across suffix attempts so the transport
+// and connection pool are created once, not per attempt.
 func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex string, err error) {
 	client := fetch.NewSafeClient(15 * time.Second)
-	for _, suffix := range []string{".sha256", ".sha512", ".sha1", ".md5", ".sha256sum", ".sha512sum", ".sha1sum", ".md5sum"} {
+	for _, suffix := range []string{".md5", ".sha1", ".sha256", ".sha512", ".md5sum", ".sha1sum", ".sha256sum", ".sha512sum"} {
 		sidecarURL := rawURL + suffix
 		algo, hex, e := fetch.FetchSidecarHash(ctx, client, sidecarURL)
 		if e == nil && hex != "" {

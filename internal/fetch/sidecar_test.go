@@ -157,3 +157,22 @@ func TestParseSidecarContentMD5SHA1(t *testing.T) {
 		t.Errorf("extension fallback algo = %q, want md5", algo)
 	}
 }
+
+func TestFetchSidecarHashHTTP(t *testing.T) {
+	payload := makePayload(16 * 1024)
+	hash := sha256Hex(payload)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(hash + "  file.bin\n"))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := &http.Client{Transport: &http.Transport{}}
+	algo, hex, err := FetchSidecarHash(context.Background(), client, srv.URL)
+	if err != nil {
+		t.Fatalf("FetchSidecarHash over http: %v", err)
+	}
+	if algo != "sha256" || hex != hash {
+		t.Errorf("got %s:%s, want sha256:%s", algo, hex, hash)
+	}
+}
