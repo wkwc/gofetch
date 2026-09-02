@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -264,15 +265,30 @@ func run(args []string) int {
 	return exit
 }
 
-// emitProbeJSON prints one probe result (or its error) as JSONL. On
-// error the error string is carried so scripts can distinguish failures.
+// probeJSON is the machine-readable shape of one --info --json result.
+// On failure only url and error are populated; success carries the probe.
+type probeJSON struct {
+	URL            string `json:"url"`
+	Size           int64  `json:"size,omitempty"`
+	SupportsRanges bool   `json:"supports_ranges,omitempty"`
+	Workers        int    `json:"workers,omitempty"`
+	BufSize        int    `json:"buf_size,omitempty"`
+	Error          string `json:"error,omitempty"`
+}
+
+// emitProbeJSON prints one probe result (or its error) as a JSON line.
+// Uses encoding/json (not fmt %q) so arbitrary URL bytes stay valid JSON.
 func emitProbeJSON(rawURL string, p fetch.ProbeInfo, err error) {
+	out := probeJSON{URL: rawURL}
 	if err != nil {
-		fmt.Printf(`{"url":%q,"error":%q}`+"\n", rawURL, err.Error())
-		return
+		out.Error = err.Error()
+	} else {
+		out.Size = p.Total
+		out.SupportsRanges = p.SupportsRanges
+		out.Workers = p.Workers
+		out.BufSize = p.BufSize
 	}
-	fmt.Printf(`{"url":%q,"size":%d,"supports_ranges":%t,"workers":%d,"buf_size":%d}`+"\n",
-		rawURL, p.Total, p.SupportsRanges, p.Workers, p.BufSize)
+	_ = json.NewEncoder(os.Stdout).Encode(out)
 }
 
 // resolveOutputs maps each URL to its output path. With a single URL,

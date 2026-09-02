@@ -36,7 +36,8 @@ func hashSize(algo string) int {
 }
 
 // ParseHashFlag parses "-h sha256:abcdef..." or "-h sha512:abcdef...".
-// Also accepts bare hex (treated as sha256 for backward compatibility).
+// Also accepts bare hex, inferring the algorithm from its length
+// (64 = sha256, 128 = sha512), consistent with sidecar inference.
 // Returns (algo, hex, error).
 func ParseHashFlag(s string) (algo, hexHash string, err error) {
 	if s == "" {
@@ -54,11 +55,22 @@ func ParseHashFlag(s string) (algo, hexHash string, err error) {
 		}
 		return a, h, nil
 	}
-	// Bare hex — assume sha256
-	if err := validateHexHash(s, "sha256"); err != nil {
-		return "", "", err
+	// Bare hex — infer the algorithm from the length.
+	switch len(s) {
+	case hashSize("sha256") * 2:
+		if err := validateHexHash(s, "sha256"); err != nil {
+			return "", "", err
+		}
+		return "sha256", s, nil
+	case hashSize("sha512") * 2:
+		if err := validateHexHash(s, "sha512"); err != nil {
+			return "", "", err
+		}
+		return "sha512", s, nil
+	default:
+		return "", "", fmt.Errorf("expected %d (sha256) or %d (sha512) hex characters, got %d",
+			hashSize("sha256")*2, hashSize("sha512")*2, len(s))
 	}
-	return "sha256", s, nil
 }
 
 // validateHexHash checks that s is a valid hex string of the correct length.

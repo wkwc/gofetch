@@ -554,3 +554,27 @@ func TestRunMaxRetriesInvalid(t *testing.T) {
 		t.Errorf("run(--max-retries 1000) = %d, want 1", code)
 	}
 }
+
+func TestRunInfoJSONError(t *testing.T) {
+	// A URL that fails to probe must still emit a valid JSON object with
+	// an error field (one line per URL, JSONL contract).
+	out := captureStdout(t, func() {
+		// 127.0.0.1 with --allow-loopback: probe will attempt a dial and fail.
+		if code := run([]string{"--allow-loopback", "--info", "--json", "http://127.0.0.1:1/x.bin"}); code != 1 {
+			t.Errorf("run(--info --json failing URL) = %d, want 1", code)
+		}
+	})
+	var got struct {
+		URL   string `json:"url"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &got); err != nil {
+		t.Fatalf("error result is not valid JSON: %v\n%s", err, out)
+	}
+	if got.URL != "http://127.0.0.1:1/x.bin" {
+		t.Errorf("url = %q", got.URL)
+	}
+	if got.Error == "" {
+		t.Error("expected non-empty error field")
+	}
+}

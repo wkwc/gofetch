@@ -86,6 +86,7 @@ func TestParseHashFlag(t *testing.T) {
 	}{
 		{name: "empty", input: "", algo: "", hexHash: ""},
 		{name: "bare sha256 hex", input: sha256Hex, algo: "sha256", hexHash: sha256Hex},
+		{name: "bare sha512 hex", input: sha512Hex, algo: "sha512", hexHash: sha512Hex},
 		{name: "algo:hex sha256", input: "sha256:" + sha256Hex, algo: "sha256", hexHash: sha256Hex},
 		{name: "algo:hex sha512", input: "sha512:" + sha512Hex, algo: "sha512", hexHash: sha512Hex},
 		{name: "uppercase algo", input: "SHA256:" + sha256Hex, algo: "sha256", hexHash: sha256Hex},

@@ -183,8 +183,8 @@ The `-h` flag supports multiple formats:
 | *(default)* | No `-h` needed: a local `<output>.sha256`/`.sha512` sidecar is auto-detected next to the output file |
 | `sha256:hex` | `gofetch -h sha256:abc123...` |
 | `sha512:hex` | `gofetch -h sha512:abc123...` |
-| `auto` | local sidecar first, else fetches `URL.sha256`/`.sha512` sidecars |
-| bare hex (assumes sha256) | `gofetch -h abc123...` |
+| `auto` | local sidecar first, else fetches `URL.sha256`/`.sha512` sidecars (remote fetch requires HTTPS) |
+| bare hex (64 chars → sha256, 128 chars → sha512) | `gofetch -h abc123...` |
 | local sidecar file | `gofetch -h /path/file.sha256 https://...` |
 
 Integrity verification is zero-config when a checksum sidecar already sits
