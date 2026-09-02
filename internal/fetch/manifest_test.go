@@ -182,3 +182,59 @@ func TestManifestBadChunksTruncatedFile(t *testing.T) {
 		t.Fatalf("BadChunks on truncated file = %d, want 2 (chunks 10-14 and 15-19): %+v", len(bad), bad)
 	}
 }
+
+// TestManifestForFileRoundTrip generates a manifest from a file, writes
+// it, reloads it, and verifies it passes VerifyFull — then proves a
+// corrupted chunk is caught by BadChunks.
+func TestManifestForFileRoundTrip(t *testing.T) {
+	payload := makePayload(3 * 1024 * 1024) // crosses the 1 MiB chunk boundary
+	dir := t.TempDir()
+	file := filepath.Join(dir, "data.bin")
+	if err := os.WriteFile(file, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := ManifestForFile(file, "sha256", 0)
+	if err != nil {
+		t.Fatalf("ManifestForFile: %v", err)
+	}
+	if m.Version != ManifestVersion || m.Algo != "sha256" {
+		t.Errorf("manifest header = v%d/%s, want v%d/sha256", m.Version, m.Algo, ManifestVersion)
+	}
+	if len(m.Chunks) != 3 {
+		t.Fatalf("got %d chunks, want 3 (3 MiB / 1 MiB)", len(m.Chunks))
+	}
+	if m.Chunks[0].Start != 0 || m.Chunks[0].End != (1<<20)-1 {
+		t.Errorf("chunk[0] = %d-%d, want 0-%d", m.Chunks[0].Start, m.Chunks[0].End, (1<<20)-1)
+	}
+	if err := m.VerifyFull(file); err != nil {
+		t.Errorf("VerifyFull on generated manifest: %v", err)
+	}
+
+	// Write + reload round trip.
+	mpath := filepath.Join(dir, "data.gofetch.manifest")
+	if err := WriteManifest(mpath, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+	re, err := LoadManifest(mpath)
+	if err != nil {
+		t.Fatalf("LoadManifest: %v", err)
+	}
+	if len(re.Chunks) != len(m.Chunks) {
+		t.Fatalf("reloaded %d chunks, want %d", len(re.Chunks), len(m.Chunks))
+	}
+	if err := re.VerifyFull(file); err != nil {
+		t.Errorf("VerifyFull via reloaded manifest: %v", err)
+	}
+
+	// Corrupt the middle chunk and confirm BadChunks localizes it.
+	corrupt := append([]byte(nil), payload...)
+	corrupt[2<<20] ^= 0xff
+	if err := os.WriteFile(file, corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bad := re.BadChunks(file)
+	if len(bad) != 1 || bad[0].Start != 2<<20 {
+		t.Errorf("BadChunks = %+v, want single chunk starting at %d", bad, 2<<20)
+	}
+}

@@ -29,6 +29,64 @@ type ChunkHash struct {
 	Hash  string `json:"hash"`
 }
 
+// ManifestForFile hashes path in chunks of at most chunkSize bytes and
+// returns a Manifest describing them. chunkSize <= 0 selects minSeedChunk
+// (1 MiB). The last chunk absorbs any remainder.
+func ManifestForFile(path, algo string, chunkSize int64) (*Manifest, error) {
+	if chunkSize <= 0 {
+		chunkSize = minSeedChunk
+	}
+	if algo == "" {
+		algo = "sha256"
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	m := &Manifest{Version: ManifestVersion, Algo: algo}
+	buf := acquireBuf(int(chunkSize))
+	defer releaseBuf(buf)
+	var start int64
+	for {
+		n, rerr := io.ReadFull(f, buf)
+		if n == 0 && rerr == io.EOF {
+			break
+		}
+		if n > 0 {
+			h := newHash(algo)
+			h.Write(buf[:n])
+			m.Chunks = append(m.Chunks, ChunkHash{
+				Start: start,
+				End:   start + int64(n) - 1,
+				Hash:  hex.EncodeToString(h.Sum(nil)),
+			})
+			start += int64(n)
+		}
+		if rerr != nil && rerr != io.ErrUnexpectedEOF {
+			if rerr == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("manifest: read at %d: %w", start, rerr)
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	m.buildIndex()
+	return m, nil
+}
+
+// WriteManifest writes m to path atomically (tmp + fsync + rename).
+func WriteManifest(path string, m *Manifest) error {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, data)
+}
+
 // LoadManifest reads a .gofetch.manifest JSON file.
 func LoadManifest(path string) (*Manifest, error) {
 	data, err := os.ReadFile(path)
@@ -159,8 +217,8 @@ func (m *Manifest) VerifyFull(path string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	const bufSize = 256 * 1024
-	buf := make([]byte, bufSize)
+	buf := acquireBuf(bufSizeLarge)
+	defer releaseBuf(buf)
 	for _, c := range m.Chunks {
 		got, err := readChunkHash(f, c, m.Algo, buf)
 		if err != nil {
@@ -191,8 +249,8 @@ func (m *Manifest) BadChunks(path string) []ChunkHash {
 		return nil
 	}
 	defer func() { _ = f.Close() }()
-	const bufSize = 256 * 1024
-	buf := make([]byte, bufSize)
+	buf := acquireBuf(bufSizeLarge)
+	defer releaseBuf(buf)
 	var bad []ChunkHash
 	for _, c := range m.Chunks {
 		got, err := readChunkHash(f, c, m.Algo, buf)
