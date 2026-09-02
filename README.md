@@ -36,6 +36,8 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **Hash** | `-h SPEC` | Verify integrity. Zero-config by default (auto-detects local sidecar); override with `sha256:hex`, `sha512:hex`, `auto`, or a sidecar path |
 | **No Resume** | `--no-resume` | Disable resume from `.gofetch.resume` (default: enabled) |
 | **Mirrors** | `-m URL1,URL2` | Comma-separated mirror URLs tried in order on failure |
+| **Manifest** | `-manifest-out PATH` | After download, write a per-chunk integrity manifest to PATH |
+| **Local bench** | `--allow-loopback` | Permit loopback/private dials (for the bundled benchserver / tests; unsafe for untrusted URLs) |
 
 ## Usage
 
@@ -63,6 +65,12 @@ gofetch --no-resume https://example.com/file.bin
 
 # Mirror fallback (tried in order on failure; bare hostnames get https://)
 gofetch -m mirror1.com,mirror2.com https://primary.com/file.bin
+
+# Generate a per-chunk integrity manifest after download (chunk-level verification for future runs)
+gofetch -manifest-out out.gofetch.manifest -o out.bin https://example.com/file.bin
+
+# Local benchmark against the bundled benchserver (only for trusted local URLs!)
+gofetch --allow-loopback -o out.bin http://127.0.0.1:9120/
 ```
 
 If the server doesn't support `Range`, it gracefully falls back to a single GET stream.
@@ -135,7 +143,16 @@ Algorithm is inferred from hash length (64 = sha256, 128 = sha512) or file exten
 
 For extra assurance, a manifest file (`<output>.gofetch.manifest`) can be created
 alongside the download containing per-chunk SHA-256 hashes. If present, gofetch
-verifies each chunk during download and the whole file on completion.
+verifies each chunk during download and the whole file on completion. Create one
+by downloading (or re-downloading) with `-manifest-out`:
+
+```bash
+gofetch -manifest-out file.gofetch.manifest -o file https://example.com/file
+```
+
+Chunks are 1 MiB by default. On a manifest verification failure gofetch locates
+the corrupt chunk(s), surgically trims only those byte ranges from the resume
+sidecar, and the next run re-fetches just the bad spans instead of the whole file.
 
 ## Resume
 
@@ -152,35 +169,71 @@ stays compact even across many abort/resume cycles.
 ```
 gofetch/
   go.mod
-  cmd/gofetch/main.go              # CLI entrypoint
-  cmd/benchserver/                 # Synthetic HTTP server for benchmarking
+  cmd/gofetch/
+    main.go                  # CLI entrypoint, flag parsing, run loop
+    sidecar.go               # -h resolution: local/remote sidecar auto-detect
+    validate.go              # URL + mirror validation (SSRF guards)
+    manifest.go              # -manifest-out writer
+    main_test.go
+  cmd/benchserver/           # Synthetic HTTP server for benchmarking
   internal/fetch/
-    downloader.go                  # Core Downloader type and constructor
-    worker.go                      # Worker goroutine, HTTP range requests, buffer pool
-    monitor.go                     # Work-stealing monitor
-    range.go                       # Parallel range-download orchestration
-    single.go                      # Single-stream fallback (no range support)
-    mirror.go                      # Server probing, Content-Range parsing
-    seeds.go                       # Range splitting and gap computation
-    task.go                        # Task struct and lock-free FIFO queue
-    progress.go                    # Progress tracking, byte formatting, verbose log
-    finalize.go                    # Sync/close, integrity verify, download summary
-    resume.go                      # Resume state: persistence, accumulator, sidecar cleanup
-    hash.go                        # SHA-256/512 computation and verification
-    manifest.go                    # Per-chunk integrity manifest (O(1) lookup)
-    optimizer.go                   # Auto-config + transport factory
-    *_test.go                      # Unit, property, and end-to-end tests
-  scripts/                         # Benchmark scripts
+    downloader.go            # Core Downloader type and constructor
+    worker.go                # Worker goroutine, HTTP range requests, buffer pool
+    monitor.go               # Work-stealing monitor
+    range.go                 # Parallel range-download orchestration
+    single.go                # Single-stream fallback (no range support)
+    mirror.go                # Server probing, Content-Range parsing, request builder
+    seeds.go                 # Range splitting and gap computation
+    task.go                  # Task struct and lock-free FIFO queue
+    progress.go              # Progress tracking, byte formatting, verbose log
+    finalize.go              # Sync/close, integrity verify, download summary
+    resume.go                # Resume state: persistence, accumulator, sidecar cleanup
+    hash.go                  # SHA-256/512 computation and verification
+    sidecar.go               # Sidecar hash parsing (shared with CLI)
+    manifest.go              # Per-chunk integrity manifest (O(1) lookup, generator)
+    optimizer.go             # Auto-config + transport factory
+    ssrf.go                  # SSRF hardening, safe dial/redirect policy
+    idle_body.go             # Idle-timeout body wrapper
+    mmap_*.go                # mmap-backed zero-copy writer + platform stubs
+    sockopts_*.go            # Linux TCP tuning + platform stubs
+    fuzz_test.go             # Fuzz targets for parsers and range algebra
+    *_test.go                # Unit, property, and end-to-end tests
+  scripts/
+    bench.sh                 # Consolidated benchmark suite (quick|full|compare|all)
+    bench_lib.sh             # Shared bench helpers (build, server lifecycle)
+    fuzz.sh                  # Fuzz all targets
+    install.sh               # Release installer (checksum-verified)
 ```
 
 ## Benchmark
 
-Run the synthetic-loopback comparison against aria2c:
+One consolidated script, four modes (shared server lifecycle lives in `scripts/bench_lib.sh`):
 
 ```bash
-# Both binaries must be built (gofetch via `go build`, aria2c downloaded)
-RUNS=5 SIZE_MB=64 ./scripts/bench_compare.sh
+./scripts/bench.sh quick                # auto/quiet timing across sizes + hyperfine if present
+./scripts/bench.sh full                 # sizes, hash verify, resume, mode + manifest tests
+./scripts/bench.sh compare [SIZE_MB]    # gofetch vs aria2c (requires aria2c)
+./scripts/bench.sh all                  # everything
+# RUNS=5 SIZE_MB=64 ./scripts/bench.sh compare
 ```
+
+The bundled `cmd/benchserver` serves deterministic payloads with Range support on
+`127.0.0.1:9120`; the suite passes `--allow-loopback` so gofetch can talk to it
+(never use that flag with URLs you do not trust).
+
+## Fuzzing
+
+```bash
+./scripts/fuzz.sh                  # quick fuzz of every target (30s each)
+./scripts/fuzz.sh FuzzParseUint    # one target until Ctrl-C / FUZZTIME elapses
+FUZZTIME=2m ./scripts/fuzz.sh FuzzManifestJSON
+```
+
+Fuzz targets cover the parsers (`Content-Range`, `Retry-After`, hash/sidecar
+flags, manifest JSON) and the range algebra (`splitRange`, `uncompleted`,
+`dedupTasks`). Their seed corpora run as normal unit tests; new interesting
+inputs are saved under `internal/fetch/testdata/fuzz/` — commit them as
+regression seeds.
 
 Measurements on a Linux 16-core test box (loopback, fresh server per
 run, 64 MB):
@@ -202,8 +255,10 @@ comes from:
 
 A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push to `main`:
 
-- `gofmt` check, `go vet`, `staticcheck`, `golangci-lint`, `go test -race`
+- `gofmt` check, `go vet`, `staticcheck`, `golangci-lint`, `govulncheck`, `deadcode`
+- `go test -race -shuffle=on` (shuffled order catches order-dependent tests)
 - Build stripped release binary
+- GitHub Actions dependencies are tracked by Dependabot (`.github/dependabot.yml`)
 
 ## Tested
 
@@ -212,7 +267,7 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 - `go vet`, `gofmt`, `go build` clean.
 - Race detector clean (`go test -race`).
 - `staticcheck` clean.
-- 30 tests pass under `-race -count=5`.
+- 100+ tests (unit, e2e, and fuzz seed corpora) pass under `-race -shuffle=on`.
 
 ## License
 

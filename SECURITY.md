@@ -14,7 +14,11 @@ gofetch is a **client CLI** that fetches attacker- or operator-supplied URLs ont
 ## Non-goals
 
 - Not a multi-tenant download service.
-- Loopback dials are blocked unless tests set `AllowLoopbackDial` (never from CLI).
+- Loopback dials are blocked by default: production never enables them, and the
+  CLI only lifts the block via the explicit `--allow-loopback` flag, which exists
+  solely for the repo's own benchmark scripts and local tests. Do not pass
+  `--allow-loopback` with URLs you do not trust — it disables the SSRF guard for
+  loopback/private destinations.
 
 ## Reporting
 

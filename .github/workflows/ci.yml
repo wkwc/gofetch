@@ -16,6 +16,10 @@ permissions:
 
 env:
   GO_VERSION: "1.26.5"
+  # Pinned tool versions for reproducible CI.
+  STATICCHECK_VERSION: "v0.8.1"
+  DEADCODE_VERSION: "v0.49.0"
+  GOVULNCHECK_VERSION: "v1.7.0"
 
 jobs:
   lint-and-test:
@@ -44,10 +48,13 @@ jobs:
         run: go vet ./...
 
       - name: Staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest && staticcheck ./...
+        run: go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} && staticcheck ./...
 
       - name: Deadcode
-        run: go install golang.org/x/tools/cmd/deadcode@latest && deadcode -test=false ./...
+        run: go install golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION} && deadcode -test=false ./...
+
+      - name: govulncheck (vulnerability scan)
+        run: go install golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} && govulncheck ./...
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -55,8 +62,8 @@ jobs:
           version: v2.12.2
           args: --timeout=5m
 
-      - name: Unit tests
-        run: go test -race -count=1 ./...
+      - name: Unit tests (race, shuffled)
+        run: go test -race -shuffle=on -count=1 ./...
 
   build:
     name: Build Release Binary
