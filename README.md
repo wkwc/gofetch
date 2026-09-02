@@ -305,7 +305,7 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 - `go vet`, `gofmt`, `go build` clean.
 - Race detector clean (`go test -race`).
 - `staticcheck` clean.
-- 100+ tests (unit, e2e, and fuzz seed corpora) pass under `-race -shuffle=on`.
+- 145+ tests (unit, e2e, and fuzz seed corpora) pass under `-race -shuffle=on`.
 
 ## License
 

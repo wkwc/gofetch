@@ -27,10 +27,7 @@ func stderrIsTTY() bool {
 }
 
 // HumanBytes returns a short IEC-formatted byte count.
-func HumanBytes(n int64) string { return humanBytes(n) }
-
-// humanBytes returns a short IEC-formatted byte count.
-func humanBytes(n int64) string {
+func HumanBytes(n int64) string {
 	const k = 1024
 	if n < k {
 		return strconv.FormatInt(n, 10) + " B"
@@ -169,14 +166,14 @@ func (d *Downloader) printProgress(p *progress, final bool) {
 		}
 	}
 	speed, eta := p.speedAndETA(done)
-	speedStr := humanBytes(int64(speed)) + "/s"
+	speedStr := HumanBytes(int64(speed)) + "/s"
 	etaStr := ""
 	if speed > 0 && !final {
 		etaStr = "  ETA " + formatDuration(eta)
 	}
 	if final {
 		line := fmt.Sprintf("  %s %5.1f%%  %s / %s  %s",
-			bar[:], pct*100, humanBytes(done), humanBytes(total), speedStr)
+			bar[:], pct*100, HumanBytes(done), HumanBytes(total), speedStr)
 		if tty {
 			fmt.Fprintln(os.Stderr, "\r"+line+"\033[K")
 		} else {
@@ -184,7 +181,7 @@ func (d *Downloader) printProgress(p *progress, final bool) {
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "\r  %s %5.1f%%  %s / %s  %s%s   ",
-			bar[:], pct*100, humanBytes(done), humanBytes(total), speedStr, etaStr)
+			bar[:], pct*100, HumanBytes(done), HumanBytes(total), speedStr, etaStr)
 	}
 }
 

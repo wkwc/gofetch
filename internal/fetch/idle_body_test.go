@@ -68,7 +68,7 @@ type fakeConn struct {
 	readFn func([]byte) (int, error)
 }
 
-func (f *fakeConn) Read(p []byte) (int, error) { return f.readFn(p) }
+func (f *fakeConn) Read(p []byte) (int, error)      { return f.readFn(p) }
 func (f *fakeConn) SetReadDeadline(time.Time) error { return nil }
 
 type timeoutErr struct{}

@@ -117,9 +117,9 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 	}
 
 	fmt.Fprintln(os.Stderr, "\n  download complete")
-	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", humanBytes(done))
+	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", HumanBytes(done))
 	fmt.Fprintf(os.Stderr, "  time:    %s\n", formatDuration(elapsed))
-	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", humanBytes(int64(speed)))
+	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", HumanBytes(int64(speed)))
 	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workerCount)
 
 	return nil

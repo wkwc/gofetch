@@ -265,7 +265,7 @@ func (d *Downloader) applyProbe(info probeInfo) {
 	if !d.bufSet {
 		d.bufSize = d.autoConfig.BufSize
 	}
-	d.vlog("ranges=%v total=%s", info.supportsRanges, humanBytes(info.total))
+	d.vlog("ranges=%v total=%s", info.supportsRanges, HumanBytes(info.total))
 }
 
 // resolveResume derives the seed ranges (completed) for a fresh mirror

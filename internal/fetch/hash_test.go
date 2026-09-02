@@ -25,8 +25,8 @@ func TestHumanBytes(t *testing.T) {
 		{-1, "-1 B"},
 	}
 	for _, tt := range tests {
-		if got := humanBytes(tt.input); got != tt.want {
-			t.Errorf("humanBytes(%d) = %q, want %q", tt.input, got, tt.want)
+		if got := HumanBytes(tt.input); got != tt.want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }
