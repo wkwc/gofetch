@@ -40,6 +40,10 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **Headers** | `-H "Name: value"` | Send a custom header (repeatable; auth/cookies) |
 | **User-Agent** | `-A VALUE` | Override the default `gofetch/1.0` User-Agent (alias: `--user-agent`) |
 | **Rate limit** | `--limit-rate` | Cap aggregate download speed per file (`500k`, `2M`, `1G`) |
+| **Probe** | `--info` | Print size / range support / planned workers without downloading |
+| **Workers** | `-x N` / `--workers` | Override the auto-tuned worker count (0 = auto) |
+| **Buffer** | `--buf-size` | Override the auto-tuned per-worker read buffer (`64k`, `1M`) |
+| **No Clobber** | `--no-clobber` | Skip downloads whose output file already exists |
 | **Proxy** | `--proxy URL` | HTTP(S)/SOCKS5 proxy; overrides the environment |
 | **Manifest** | `-manifest-out PATH` | After download, write a per-chunk integrity manifest to PATH |
 | **Local bench** | `--allow-loopback` | Permit loopback/private dials (for the bundled benchserver / tests; unsafe for untrusted URLs) |
@@ -88,6 +92,15 @@ gofetch --limit-rate 2M -o out.bin https://example.com/large.bin
 
 # Explicit proxy (overrides HTTP_PROXY/HTTPS_PROXY/ALL_PROXY)
 gofetch --proxy http://proxy.example.com:8080 -o out.bin https://example.com/file.bin
+
+# Probe without downloading (script-friendly: prints size/ranges/workers)
+gofetch --info https://example.com/file.bin
+
+# Escape hatches for the auto-tuned engine
+gofetch -x 16 --buf-size 256k -o out.bin https://example.com/large.bin
+
+# Skip if the output already exists
+gofetch --no-clobber -o out.bin https://example.com/file.bin
 
 # Generate a per-chunk integrity manifest after download (chunk-level verification for future runs)
 gofetch -manifest-out out.gofetch.manifest -o out.bin https://example.com/file.bin
@@ -255,9 +268,9 @@ FUZZTIME=2m ./scripts/fuzz.sh FuzzManifestJSON
 
 Fuzz targets cover the parsers (`Content-Range`, `Retry-After`, hash/sidecar
 flags, manifest JSON) and the range algebra (`splitRange`, `uncompleted`,
-`dedupTasks`). Their seed corpora run as normal unit tests; new interesting
-inputs are saved under `internal/fetch/testdata/fuzz/` — commit them as
-regression seeds.
+`dedupTasks`). Their seed corpora run as normal unit tests; interesting inputs
+discovered during fuzzing are saved under `internal/fetch/testdata/fuzz/` and
+committed as regression seeds (CI also runs a short fuzz smoke).
 
 Measurements on a Linux 16-core test box (loopback, fresh server per
 run, 64 MB):
@@ -281,6 +294,7 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 
 - `gofmt` check, `go vet`, `staticcheck`, `golangci-lint`, `govulncheck`, `deadcode`
 - `go test -race -shuffle=on` (shuffled order catches order-dependent tests)
+- 15s `go test -fuzz` smoke on a parser target (corpus committed under `internal/fetch/testdata/fuzz/`)
 - Build stripped release binary
 - GitHub Actions dependencies are tracked by Dependabot (`.github/dependabot.yml`)
 

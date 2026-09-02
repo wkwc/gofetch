@@ -65,6 +65,9 @@ jobs:
       - name: Unit tests (race, shuffled)
         run: go test -race -shuffle=on -count=1 ./...
 
+      - name: Fuzz smoke (15s)
+        run: go test ./internal/fetch/ -run '^$' -fuzz '^FuzzParseContentRange$' -fuzztime 15s
+
   build:
     name: Build Release Binary
     needs: lint-and-test

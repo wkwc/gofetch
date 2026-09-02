@@ -22,9 +22,14 @@ bench_cleanup() {
 }
 
 bench_build() {
+  # Build once per invocation: bench.sh all runs quick/full/compare in turn.
+  if [ "${BENCH_BUILT:-0}" = "1" ]; then
+    return
+  fi
   echo "=== Building ==="
   go build -o "${GOFETCH}" ./cmd/gofetch/
   go build -o "${BENCHSERVER}" ./cmd/benchserver/
+  BENCH_BUILT=1
 }
 
 bench_wait_for_server() {

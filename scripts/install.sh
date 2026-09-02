@@ -21,7 +21,13 @@ case "${OS}" in
 esac
 
 if [ "${VERSION}" = "latest" ]; then
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
+  # Prefer the GitHub CLI when available; fall back to a JSON scrape.
+  if command -v gh >/dev/null 2>&1; then
+    VERSION="$(gh api "repos/${REPO}/releases/latest" --jq .tag_name 2>/dev/null || true)"
+  fi
+  if [ -z "${VERSION}" ]; then
+    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
+  fi
 fi
 [ -n "${VERSION}" ] || { echo "could not resolve version" >&2; exit 1; }
 
