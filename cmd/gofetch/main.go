@@ -60,12 +60,17 @@ func run(args []string) int {
 		userAgent   = fs.String("A", "", "custom User-Agent header")
 		proxy       = fs.String("proxy", "", "HTTP(S)/SOCKS5 proxy URL (overrides environment)")
 		allowLocal  = fs.Bool("allow-loopback", false, "permit loopback/private dials (local benchmarks/tests only; unsafe for untrusted URLs)")
+		info        = fs.Bool("info", false, "probe URLs and print size/range support without downloading")
+		workers     = fs.Int("x", 0, "override auto-tuned worker count (0 = auto)")
+		bufSize     = fs.String("buf-size", "", "override auto-tuned read buffer per worker (e.g. 64k, 1M)")
+		noClobber   = fs.Bool("no-clobber", false, "skip downloads whose output file already exists")
 		showVersion = fs.Bool("version", false, "print version and exit")
 		headers     headerList
 	)
 	fs.Var(&headers, "H", "send a custom header 'Name: value' (repeatable)")
 	fs.Var(&headers, "header", "send a custom header 'Name: value' (repeatable)")
 	fs.StringVar(userAgent, "user-agent", "", "custom User-Agent header")
+	fs.IntVar(workers, "workers", 0, "override auto-tuned worker count (0 = auto)")
 	fs.Usage = func() { usage(fs) }
 
 	if err := fs.Parse(args); err != nil {
@@ -117,6 +122,23 @@ func run(args []string) int {
 			return 1
 		}
 	}
+	if *workers < 0 || *workers > 256 {
+		fmt.Fprintln(os.Stderr, "gofetch: -x workers must be between 1 and 256")
+		return 1
+	}
+	bufBytes := int64(0)
+	if *bufSize != "" {
+		var err error
+		// Same number+suffix parser as --limit-rate; value is bytes here.
+		if bufBytes, err = parseRateLimit(*bufSize); err != nil {
+			fmt.Fprintln(os.Stderr, "gofetch:", err)
+			return 1
+		}
+		if bufBytes != 0 && (bufBytes < 4096 || bufBytes > 32<<20) {
+			fmt.Fprintln(os.Stderr, "gofetch: --buf-size must be between 4k and 32M")
+			return 1
+		}
+	}
 
 	rawURLs := fs.Args()
 	// Validate every URL up front (all-or-nothing), like the old CLI.
@@ -125,6 +147,30 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, "gofetch:", err)
 			return 1
 		}
+	}
+
+	// --info probes each URL and reports without downloading.
+	if *info {
+		exit := 0
+		for _, u := range rawURLs {
+			p, err := fetch.ProbeURL(ctx, u)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", u, err)
+				exit = 1
+				continue
+			}
+			ranges := "no"
+			if p.SupportsRanges {
+				ranges = "yes"
+			}
+			fmt.Printf("url:    %s\n", u)
+			fmt.Printf("size:   %s\n", fetch.HumanBytes(p.Total))
+			fmt.Printf("ranges: %s\n", ranges)
+			fmt.Printf("workers:%d\n", p.Workers)
+			fmt.Printf("buf:    %s\n", fetch.HumanBytes(int64(p.BufSize)))
+			fmt.Println()
+		}
+		return exit
 	}
 
 	outs, err := resolveOutputs(*outPath, rawURLs)
@@ -136,6 +182,12 @@ func run(args []string) int {
 	exit := 0
 	for i, rawURL := range rawURLs {
 		out := outs[i]
+		if *noClobber {
+			if _, err := os.Stat(out); err == nil {
+				fmt.Fprintf(os.Stderr, "gofetch: %s: already exists, skipping\n", out)
+				continue
+			}
+		}
 		algo, hashHex, err := resolveHash(ctx, *hashFlag, rawURL, out)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", rawURL, err)
@@ -153,6 +205,8 @@ func run(args []string) int {
 			RateLimit:    rate,
 			Proxy:        *proxy,
 			UserAgent:    *userAgent,
+			Workers:      *workers,
+			BufSize:      int(bufBytes),
 		})
 
 		if err := d.Download(ctx); err != nil {
@@ -273,8 +327,11 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(os.Stderr, "  gofetch -o out.bin https://example.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch -o ~/Downloads https://example.com/file.bin     # existing dir")
 	fmt.Fprintln(os.Stderr, "  gofetch -o ~/Downloads url1 url2 url3                   # multiple files")
+	fmt.Fprintln(os.Stderr, "  gofetch --info https://example.com/file.bin             # probe, no download")
 	fmt.Fprintln(os.Stderr, "  gofetch -H 'Authorization: Bearer token' -o out.bin https://example.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch --limit-rate 2M -o out.bin https://example.com/file.bin")
+	fmt.Fprintln(os.Stderr, "  gofetch -x 16 --buf-size 256k -o out.bin https://example.com/file.bin")
+	fmt.Fprintln(os.Stderr, "  gofetch --no-clobber -o out.bin https://example.com/file.bin  # skip if exists")
 	fmt.Fprintln(os.Stderr, "  gofetch -h auto https://example.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch -m mirror1,mirror2 https://primary.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch --allow-loopback -o out.bin http://127.0.0.1:9120/  # local benchserver")

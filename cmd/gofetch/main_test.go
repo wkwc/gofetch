@@ -3,16 +3,36 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wkwc/gofetch/internal/fetch"
 )
+
+// captureStdout runs fn while capturing everything printed to stdout.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+	fn()
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	_ = r.Close()
+	return string(out)
+}
 
 func TestAutoDetectLocalSidecar(t *testing.T) {
 	dir := t.TempDir()
@@ -403,5 +423,71 @@ func TestRunRateLimit(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Errorf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+func TestRunInfo(t *testing.T) {
+	payload := bytes.Repeat([]byte("0123456789"), 512*1024) // 5 MiB
+	srv := newTestServer(t, payload)
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"--allow-loopback", "--info", srv.URL}); code != 0 {
+			t.Errorf("run(--info) = %d, want 0", code)
+		}
+	})
+	for _, want := range []string{"url:", "size:", "ranges:", "workers:", "buf:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--info output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunWorkersBufSize(t *testing.T) {
+	payload := bytes.Repeat([]byte("abcdef"), 512*1024)
+	srv := newTestServer(t, payload)
+	out := filepath.Join(t.TempDir(), "wb.bin")
+	code := run([]string{"--allow-loopback", "-q", "-x", "2", "--buf-size", "64k", "-o", out, srv.URL})
+	if code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+func TestRunWorkersInvalid(t *testing.T) {
+	if code := run([]string{"--allow-loopback", "-x", "999", "-o", "x.bin", "http://127.0.0.1:1/x.bin"}); code != 1 {
+		t.Errorf("run(-x 999) = %d, want 1", code)
+	}
+}
+
+func TestRunNoClobber(t *testing.T) {
+	payload := []byte("clobber me")
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "c.bin")
+	if code := run([]string{"--allow-loopback", "-q", "-o", out, srv.URL}); code != 0 {
+		t.Fatalf("first run = %d", code)
+	}
+	before := hits.Load()
+
+	// Second run with --no-clobber must skip without hitting the server.
+	code := run([]string{"--allow-loopback", "-q", "--no-clobber", "-o", out, srv.URL})
+	if code != 0 {
+		t.Fatalf("no-clobber run = %d, want 0", code)
+	}
+	if hits.Load() != before {
+		t.Errorf("no-clobber hit the server: %d -> %d requests", before, hits.Load())
 	}
 }
