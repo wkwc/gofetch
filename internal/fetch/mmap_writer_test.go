@@ -164,3 +164,59 @@ func TestAllocateFileWriterWithMmap(t *testing.T) {
 		t.Error("expected mmapWriter for size > 0")
 	}
 }
+
+func TestMmapWriterTruncate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+
+	mw, err := newMmapWriter(path, 8192)
+	if err != nil {
+		t.Fatalf("newMmapWriter: %v", err)
+	}
+	defer func() { _ = mw.Close() }()
+
+	if _, err := mw.WriteAt([]byte("hello"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Truncate(4096); err != nil {
+		t.Fatalf("Truncate(4096): %v", err)
+	}
+	if mw.size != 4096 {
+		t.Errorf("size = %d, want 4096", mw.size)
+	}
+	if len(mw.data) != 4096 {
+		t.Errorf("data len = %d, want 4096", len(mw.data))
+	}
+	// Writes within the new bounds must still work.
+	if _, err := mw.WriteAt([]byte("x"), 4095); err != nil {
+		t.Errorf("WriteAt at new end: %v", err)
+	}
+	// Growing beyond the mapped size must be rejected.
+	if err := mw.Truncate(16384); err == nil {
+		t.Error("expected error growing beyond original size")
+	}
+}
+
+func TestRawFileWriterReadAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	rfw := &rawFileWriter{F: f}
+
+	data := []byte("0123456789")
+	if _, err := rfw.WriteAt(data, 0); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	if _, err := rfw.ReadAt(buf, 2); err != nil {
+		t.Fatalf("ReadAt: %v", err)
+	}
+	if string(buf) != "23456" {
+		t.Errorf("ReadAt = %q, want %q", buf, "23456")
+	}
+}

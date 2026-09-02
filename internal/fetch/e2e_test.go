@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -486,5 +487,69 @@ func TestWorkersBufOverride(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatal("content mismatch")
+	}
+}
+
+// manifestFromPayload builds a sha256 manifest over data in chunkSize
+// chunks. corruptChunk >= 0 replaces that chunk's hash with a wrong value.
+func manifestFromPayload(t *testing.T, data []byte, chunkSize int64, corruptChunk int) *Manifest {
+	t.Helper()
+	m := &Manifest{Version: ManifestVersion, Algo: "sha256"}
+	idx := 0
+	for start := int64(0); start < int64(len(data)); start += chunkSize {
+		end := start + chunkSize - 1
+		if end >= int64(len(data)) {
+			end = int64(len(data)) - 1
+		}
+		h := sha256Hex(data[start : end+1])
+		if idx == corruptChunk {
+			h = strings.Repeat("0", len(h))
+		}
+		m.Chunks = append(m.Chunks, ChunkHash{Start: start, End: end, Hash: h})
+		idx++
+	}
+	m.buildIndex()
+	return m
+}
+
+// TestEndToEndManifestVerification exercises the production integrity
+// path: a manifest beside the output is loaded, every chunk is verified
+// as its task completes (verifyTaskRange), and VerifyFull passes at the
+// end.
+func TestEndToEndManifestVerification(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024) // two 1 MiB chunks
+	srv := newRangeServer(t, payload, nil)
+	outFile := filepath.Join(t.TempDir(), "out.bin")
+	if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, -1)); err != nil {
+		t.Fatal(err)
+	}
+
+	d := NewDownloader(srv.URL, outFile, Options{NoResume: true, Quiet: true})
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("Download with valid manifest: %v", err)
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("content mismatch")
+	}
+}
+
+// TestEndToEndManifestCorruptChunkFails verifies that a manifest whose
+// expected hash for one chunk is wrong aborts the download — the chunk
+// fails verification as its task completes, before any final hash step.
+func TestEndToEndManifestCorruptChunkFails(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+	srv := newRangeServer(t, payload, nil)
+	outFile := filepath.Join(t.TempDir(), "out.bin")
+	if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	d := NewDownloader(srv.URL, outFile, Options{NoResume: true, Quiet: true})
+	if err := d.Download(testCtx(t, 30*time.Second)); err == nil {
+		t.Fatal("expected download to fail on a corrupt manifest chunk, got nil")
 	}
 }

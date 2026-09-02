@@ -36,7 +36,6 @@ type Downloader struct {
 
 	headers   []string
 	userAgent string
-	proxyURL  string
 	rateLimit *rateLimiter
 
 	// workersSet/bufSet track explicit overrides so applyProbe's Retune
@@ -111,7 +110,6 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		expectedHash:  opt.ExpectedHash,
 		headers:       opt.Headers,
 		userAgent:     ua,
-		proxyURL:      opt.Proxy,
 		rateLimit:     newRateLimiter(opt.RateLimit),
 	}
 	// Only set resumePath when resume is enabled so saves/tickers

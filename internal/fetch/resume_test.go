@@ -442,3 +442,62 @@ func TestFinalizeClearsOnNoManifestHashFailure(t *testing.T) {
 		t.Fatalf("resume sidecar must be cleared on no-manifest integrity failure; stat err=%v", err)
 	}
 }
+
+func TestClearResumeRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "sidecar.gofetch.resume")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	if err := clearResume(link); err == nil {
+		t.Fatal("expected clearResume to refuse a symlink")
+	}
+	// Target must be untouched.
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("symlink target was removed: %v", err)
+	}
+}
+
+func TestAtomicWriteFileFailures(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("missing parent dir", func(t *testing.T) {
+		if err := atomicWriteFile(filepath.Join(dir, "nope", "x"), []byte("x")); err == nil {
+			t.Error("expected error for missing parent dir")
+		}
+	})
+
+	t.Run("non-writable dir", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("running as root; permissions are not enforced")
+		}
+		ro := filepath.Join(dir, "ro")
+		if err := os.Mkdir(ro, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		if err := atomicWriteFile(filepath.Join(ro, "x"), []byte("x")); err == nil {
+			t.Error("expected error writing into read-only dir")
+		}
+	})
+
+	t.Run("happy path leaves no tmp", func(t *testing.T) {
+		p := filepath.Join(dir, "ok")
+		if err := atomicWriteFile(p, []byte("hello")); err != nil {
+			t.Fatalf("atomicWriteFile: %v", err)
+		}
+		got, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "hello" {
+			t.Errorf("content = %q, want hello", got)
+		}
+		if _, err := os.Stat(p + ".tmp"); !os.IsNotExist(err) {
+			t.Errorf("stale .tmp left behind")
+		}
+	})
+}

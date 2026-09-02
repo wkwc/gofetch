@@ -1,6 +1,12 @@
 package fetch
 
-import "testing"
+import (
+	"context"
+	"crypto/tls"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestParseSidecarContent(t *testing.T) {
 	tests := []struct {
@@ -92,5 +98,31 @@ func TestIsValidHex(t *testing.T) {
 		if got := IsValidHex(tt.input); got != tt.want {
 			t.Errorf("IsValidHex(%q) = %v, want %v", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestFetchSidecarHashTLS(t *testing.T) {
+	payload := makePayload(32 * 1024)
+	hash := sha256Hex(payload)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(hash + "  file.bin\n"))
+	}))
+	t.Cleanup(srv.Close)
+
+	// The SSRF guard needs the loopback host to be permitted (test default).
+	if !AllowLoopbackDial {
+		t.Fatal("AllowLoopbackDial must be true in tests")
+	}
+	client := &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // test-only
+	}}
+
+	algo, hex, err := FetchSidecarHash(context.Background(), client, srv.URL)
+	if err != nil {
+		t.Fatalf("FetchSidecarHash: %v", err)
+	}
+	if algo != "sha256" || hex != hash {
+		t.Errorf("got %s:%s, want sha256:%s", algo, hex, hash)
 	}
 }

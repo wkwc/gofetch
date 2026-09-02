@@ -166,7 +166,7 @@ func run(args []string) int {
 			fmt.Printf("url:    %s\n", u)
 			fmt.Printf("size:   %s\n", fetch.HumanBytes(p.Total))
 			fmt.Printf("ranges: %s\n", ranges)
-			fmt.Printf("workers:%d\n", p.Workers)
+			fmt.Printf("workers: %d\n", p.Workers)
 			fmt.Printf("buf:    %s\n", fetch.HumanBytes(int64(p.BufSize)))
 			fmt.Println()
 		}

@@ -86,3 +86,24 @@ func TestScaleBufSize(t *testing.T) {
 		}
 	}
 }
+
+func TestBackoffCapAndJitter(t *testing.T) {
+	ac := AutoConfigure(0)
+	// n=0 → RetryBase with jitter ≤ 25% upward.
+	for i := 0; i < 50; i++ {
+		d := ac.Backoff(0)
+		if d < ac.RetryBase || d > ac.RetryBase+ac.RetryBase/4 {
+			t.Fatalf("Backoff(0) = %v, outside [base, base*1.25]", d)
+		}
+	}
+	// Large n caps at RetryCap; jitter is applied on top (up to +25%).
+	for i := 0; i < 50; i++ {
+		d := ac.Backoff(30)
+		if d < ac.RetryCap {
+			t.Fatalf("Backoff(30) = %v, below cap %v", d, ac.RetryCap)
+		}
+		if d > ac.RetryCap+ac.RetryCap/4 {
+			t.Fatalf("Backoff(30) = %v, exceeds cap+jitter", d)
+		}
+	}
+}
