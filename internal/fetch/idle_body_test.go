@@ -60,3 +60,63 @@ func TestIsTransientBodyIdle(t *testing.T) {
 		t.Fatal("errBodyIdle should be transient")
 	}
 }
+
+// fakeConn is an io.Reader that also implements connDeadliner, so
+// tryConnDeadline routes idleBody onto the SetReadDeadline fast path
+// (useGo=false) instead of the helper goroutine.
+type fakeConn struct {
+	readFn func([]byte) (int, error)
+}
+
+func (f *fakeConn) Read(p []byte) (int, error) { return f.readFn(p) }
+func (f *fakeConn) SetReadDeadline(time.Time) error { return nil }
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+func TestIdleBodyDeadlinePathSuccess(t *testing.T) {
+	f := &fakeConn{readFn: func(p []byte) (int, error) { return copy(p, "hello"), io.EOF }}
+	body := newIdleBody(context.Background(), f, 200*time.Millisecond)
+	buf := make([]byte, 16)
+	n, err := body.Read(buf)
+	if string(buf[:n]) != "hello" {
+		t.Errorf("got %q, want %q", buf[:n], "hello")
+	}
+	if err != io.EOF {
+		t.Errorf("err = %v, want io.EOF", err)
+	}
+	_ = body.Close()
+}
+
+func TestIdleBodyDeadlinePathTimeout(t *testing.T) {
+	f := &fakeConn{readFn: func([]byte) (int, error) { return 0, timeoutErr{} }}
+	body := newIdleBody(context.Background(), f, 200*time.Millisecond)
+	if _, err := body.Read(make([]byte, 16)); !errors.Is(err, errBodyIdle) {
+		t.Errorf("err = %v, want errBodyIdle (deadline path)", err)
+	}
+	_ = body.Close()
+}
+
+func TestIdleBodyDeadlinePathPlainError(t *testing.T) {
+	boom := errors.New("boom")
+	f := &fakeConn{readFn: func([]byte) (int, error) { return 0, boom }}
+	body := newIdleBody(context.Background(), f, 200*time.Millisecond)
+	if _, err := body.Read(make([]byte, 16)); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want %v", err, boom)
+	}
+	_ = body.Close()
+}
+
+func TestIdleBodyDeadlinePathCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &fakeConn{readFn: func([]byte) (int, error) { return 0, io.EOF }}
+	body := newIdleBody(ctx, f, 200*time.Millisecond)
+	cancel()
+	if _, err := body.Read(make([]byte, 16)); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	_ = body.Close()
+}

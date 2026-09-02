@@ -1,0 +1,31 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # weekly, Monday 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.26.5"
+
+jobs:
+  fuzz:
+    name: Fuzz all targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # A scheduled, longer fuzz pass over every target. PR CI already
+      # runs a 15s smoke on one parser; this catches anything that only
+      # shows up with more depth. A crash fails the job.
+      - name: Fuzz all targets (20s each)
+        run: FUZZTIME=20s ./scripts/fuzz.sh
