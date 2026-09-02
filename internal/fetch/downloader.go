@@ -78,6 +78,9 @@ type Options struct {
 	// override the auto-tuned values; 0 keeps auto-tuning.
 	Workers int
 	BufSize int
+	// RetryMax overrides the per-chunk retry budget (transient errors and
+	// retryable HTTP statuses, default 10). 0 keeps the default.
+	RetryMax int
 }
 
 // NewDownloader constructs a Downloader with auto-configured defaults.
@@ -89,6 +92,9 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	}
 	if opt.BufSize > 0 {
 		ac.BufSize = opt.BufSize
+	}
+	if opt.RetryMax > 0 {
+		ac.RetryMax = opt.RetryMax
 	}
 	ua := opt.UserAgent
 	if ua == "" {

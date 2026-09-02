@@ -63,7 +63,9 @@ func run(args []string) int {
 		info        = fs.Bool("info", false, "probe URLs and print size/range support without downloading")
 		workers     = fs.Int("x", 0, "override auto-tuned worker count (0 = auto)")
 		bufSize     = fs.String("buf-size", "", "override auto-tuned read buffer per worker (e.g. 64k, 1M)")
+		maxRetries  = fs.Int("max-retries", 0, "override the per-chunk retry budget (0 = auto, default 10)")
 		noClobber   = fs.Bool("no-clobber", false, "skip downloads whose output file already exists")
+		jsonOut     = fs.Bool("json", false, "with --info, emit JSON (one object per URL)")
 		showVersion = fs.Bool("version", false, "print version and exit")
 		headers     headerList
 	)
@@ -126,6 +128,14 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "gofetch: -x workers must be between 1 and 256")
 		return 1
 	}
+	if *maxRetries < 0 || *maxRetries > 100 {
+		fmt.Fprintln(os.Stderr, "gofetch: --max-retries must be between 1 and 100")
+		return 1
+	}
+	if *jsonOut && !*info {
+		fmt.Fprintln(os.Stderr, "gofetch: --json requires --info")
+		return 1
+	}
 	bufBytes := int64(0)
 	if *bufSize != "" {
 		var err error
@@ -155,20 +165,28 @@ func run(args []string) int {
 		for _, u := range rawURLs {
 			p, err := fetch.ProbeURL(ctx, u)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", u, err)
+				if *jsonOut {
+					emitProbeJSON(u, fetch.ProbeInfo{}, err)
+				} else {
+					fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", u, err)
+				}
 				exit = 1
 				continue
 			}
-			ranges := "no"
-			if p.SupportsRanges {
-				ranges = "yes"
+			if *jsonOut {
+				emitProbeJSON(u, p, nil)
+			} else {
+				ranges := "no"
+				if p.SupportsRanges {
+					ranges = "yes"
+				}
+				fmt.Printf("url:    %s\n", u)
+				fmt.Printf("size:   %s\n", fetch.HumanBytes(p.Total))
+				fmt.Printf("ranges: %s\n", ranges)
+				fmt.Printf("workers: %d\n", p.Workers)
+				fmt.Printf("buf:    %s\n", fetch.HumanBytes(int64(p.BufSize)))
+				fmt.Println()
 			}
-			fmt.Printf("url:    %s\n", u)
-			fmt.Printf("size:   %s\n", fetch.HumanBytes(p.Total))
-			fmt.Printf("ranges: %s\n", ranges)
-			fmt.Printf("workers: %d\n", p.Workers)
-			fmt.Printf("buf:    %s\n", fetch.HumanBytes(int64(p.BufSize)))
-			fmt.Println()
 		}
 		return exit
 	}
@@ -207,6 +225,7 @@ func run(args []string) int {
 			UserAgent:    *userAgent,
 			Workers:      *workers,
 			BufSize:      int(bufBytes),
+			RetryMax:     *maxRetries,
 		})
 
 		if err := d.Download(ctx); err != nil {
@@ -243,6 +262,17 @@ func run(args []string) int {
 		fmt.Println(out)
 	}
 	return exit
+}
+
+// emitProbeJSON prints one probe result (or its error) as JSONL. On
+// error the error string is carried so scripts can distinguish failures.
+func emitProbeJSON(rawURL string, p fetch.ProbeInfo, err error) {
+	if err != nil {
+		fmt.Printf(`{"url":%q,"error":%q}`+"\n", rawURL, err.Error())
+		return
+	}
+	fmt.Printf(`{"url":%q,"size":%d,"supports_ranges":%t,"workers":%d,"buf_size":%d}`+"\n",
+		rawURL, p.Total, p.SupportsRanges, p.Workers, p.BufSize)
 }
 
 // resolveOutputs maps each URL to its output path. With a single URL,

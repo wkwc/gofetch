@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -489,5 +490,67 @@ func TestRunNoClobber(t *testing.T) {
 	}
 	if hits.Load() != before {
 		t.Errorf("no-clobber hit the server: %d -> %d requests", before, hits.Load())
+	}
+}
+
+func TestRunInfoJSON(t *testing.T) {
+	payload := bytes.Repeat([]byte("0123456789"), 512*1024) // 5 MiB
+	srv := newTestServer(t, payload)
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"--allow-loopback", "--info", "--json", srv.URL}); code != 0 {
+			t.Errorf("run(--info --json) = %d, want 0", code)
+		}
+	})
+	var got struct {
+		URL            string `json:"url"`
+		Size           int64  `json:"size"`
+		SupportsRanges bool   `json:"supports_ranges"`
+		Workers        int    `json:"workers"`
+		BufSize        int    `json:"buf_size"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &got); err != nil {
+		t.Fatalf("--json output is not a single JSON object: %v\n%s", err, out)
+	}
+	if got.URL != srv.URL {
+		t.Errorf("url = %q, want %q", got.URL, srv.URL)
+	}
+	if got.Size != int64(len(payload)) {
+		t.Errorf("size = %d, want %d", got.Size, len(payload))
+	}
+	if !got.SupportsRanges {
+		t.Error("supports_ranges = false, want true")
+	}
+	if got.Workers < 1 || got.BufSize < 1 {
+		t.Errorf("workers=%d buf_size=%d, want > 0", got.Workers, got.BufSize)
+	}
+}
+
+func TestRunJSONRequiresInfo(t *testing.T) {
+	if code := run([]string{"--json", "-o", "x.bin", "http://127.0.0.1:1/x.bin"}); code != 1 {
+		t.Errorf("run(--json without --info) = %d, want 1", code)
+	}
+}
+
+func TestRunMaxRetries(t *testing.T) {
+	payload := []byte("retries")
+	srv := newTestServer(t, payload)
+	out := filepath.Join(t.TempDir(), "r.bin")
+	code := run([]string{"--allow-loopback", "-q", "--max-retries", "3", "-o", out, srv.URL})
+	if code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("content = %q, want %q", got, payload)
+	}
+}
+
+func TestRunMaxRetriesInvalid(t *testing.T) {
+	if code := run([]string{"--max-retries", "1000", "-o", "x.bin", "http://127.0.0.1:1/x.bin"}); code != 1 {
+		t.Errorf("run(--max-retries 1000) = %d, want 1", code)
 	}
 }

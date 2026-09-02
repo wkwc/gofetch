@@ -41,8 +41,10 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **User-Agent** | `-A VALUE` | Override the default `gofetch/1.0` User-Agent (alias: `--user-agent`) |
 | **Rate limit** | `--limit-rate` | Cap aggregate download speed per file (`500k`, `2M`, `1G`) |
 | **Probe** | `--info` | Print size / range support / planned workers without downloading |
+| **JSON probe** | `--info --json` | Emit one JSON object per URL (`{"url","size","supports_ranges","workers","buf_size"}`) |
 | **Workers** | `-x N` / `--workers` | Override the auto-tuned worker count (0 = auto) |
 | **Buffer** | `--buf-size` | Override the auto-tuned per-worker read buffer (`64k`, `1M`) |
+| **Retries** | `--max-retries` | Override the per-chunk retry budget (0 = auto, default 10) |
 | **No Clobber** | `--no-clobber` | Skip downloads whose output file already exists |
 | **Proxy** | `--proxy URL` | HTTP(S)/SOCKS5 proxy; overrides the environment |
 | **Manifest** | `-manifest-out PATH` | After download, write a per-chunk integrity manifest to PATH |
@@ -95,6 +97,9 @@ gofetch --proxy http://proxy.example.com:8080 -o out.bin https://example.com/fil
 
 # Probe without downloading (script-friendly: prints size/ranges/workers)
 gofetch --info https://example.com/file.bin
+
+# Machine-readable probe (one JSON object per URL)
+gofetch --info --json https://example.com/file.bin
 
 # Escape hatches for the auto-tuned engine
 gofetch -x 16 --buf-size 256k -o out.bin https://example.com/large.bin
@@ -156,6 +161,18 @@ but "parallel curl."
 - **HTTP 429/503/502/504/408** are retried respecting `Retry-After` header.
 - **Permanent errors** (invalid URL, unsupported status codes) fail immediately.
 - **HTTP 416** (Range Not Satisfiable) is a hard error for the range (not treated as complete); the worker fails that task rather than marking unwritten bytes done.
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All requested downloads succeeded (or were skipped by `--no-clobber`) |
+| `1` | Any download/probe failed (multi-URL mode continues past per-file failures) |
+| `2` | Usage / flag error |
+| `130` | Interrupted (Ctrl-C / SIGTERM / SIGHUP); partial progress saved, re-run to resume |
+
+The output path is printed to stdout only on success; all progress, summary, and
+errors go to stderr, so `gofetch -q URL 2>/dev/null` prints just the filename.
 
 ## Integrity Verification
 

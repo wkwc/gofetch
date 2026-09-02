@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-const maxHTTPStatusRetries = 10
-
 // retryAfterDefault is the backoff applied when a retryable HTTP
 // response omits a usable Retry-After header.
 const retryAfterDefault = 5 * time.Second
@@ -266,7 +264,7 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 	rangeHeader := "bytes=" + strconv.FormatInt(task.Start, 10) + "-" + strconv.FormatInt(task.End, 10)
 
 	var lastErr error
-	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
+	for attempt := 0; attempt <= d.autoConfig.RetryMax; attempt++ {
 		req, err := d.newRequest(rctx, http.MethodGet, url, rangeHeader)
 		if err != nil {
 			return err
@@ -332,7 +330,7 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 		return d.readBody(rctx, task, f, ws, resp.Body)
 	}
 	if lastErr != nil {
-		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, maxHTTPStatusRetries, lastErr)
+		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, d.autoConfig.RetryMax, lastErr)
 	}
 	return fmt.Errorf("range %d-%d: exhausted retries on retryable HTTP status with no last error (invariant violation)", task.Start, task.End)
 }
