@@ -66,3 +66,17 @@ func TestSpeedAndETA(t *testing.T) {
 		t.Errorf("ETA at completion = %v, want 0", eta2)
 	}
 }
+
+func TestHumanBytesExported(t *testing.T) {
+	cases := map[int64]string{
+		0:       "0 B",
+		1023:    "1023 B",
+		1 << 20: "1.0 MB",
+		1 << 30: "1.00 GB",
+	}
+	for n, want := range cases {
+		if got := HumanBytes(n); got != want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

@@ -386,3 +386,27 @@ func TestRecordWrittenPrefixNoProgress(t *testing.T) {
 		t.Fatalf("expected empty completed, got %v", got)
 	}
 }
+
+func TestStealPlanClaimsOnce(t *testing.T) {
+	// The first stealPlan claims the cancel fn via CAS; a second call on
+	// the same worker must refuse (otherwise the monitor could publish two
+	// overlapping leftover ranges for one worker).
+	ws := newWorkerState()
+	ws.reset(Task{Start: 0, End: stealMinChunk * 4})
+	ws.bytesDone.Store(512 << 10)
+	cf := context.CancelFunc(func() {})
+	ws.cancelFn.Store(&cf)
+
+	now := time.Now().Add(2 * time.Second)
+	if leftover, cancel, ok := ws.stealPlan(now); !ok {
+		t.Fatal("expected first steal to succeed")
+	} else if cancel == nil {
+		t.Fatal("expected a cancel func")
+	} else if leftover.Start != 512<<10 {
+		t.Errorf("leftover.Start = %d, want %d", leftover.Start, 512<<10)
+	}
+
+	if _, _, ok := ws.stealPlan(now); ok {
+		t.Error("stealPlan must not claim a cancel fn twice")
+	}
+}
