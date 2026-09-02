@@ -150,38 +150,53 @@ var (
 	proxyHosts     map[string]struct{}
 )
 
+// loadEnvProxyHosts populates the trusted-proxy set from the environment.
+func loadEnvProxyHosts() {
+	proxyHosts = make(map[string]struct{})
+	for _, key := range []string{
+		"HTTP_PROXY", "http_proxy",
+		"HTTPS_PROXY", "https_proxy",
+		"ALL_PROXY", "all_proxy",
+	} {
+		v := os.Getenv(key)
+		if v == "" {
+			continue
+		}
+		// url.Parse needs a scheme; bare "host:port" is common.
+		if !strings.Contains(v, "://") {
+			v = "http://" + v
+		}
+		u, err := url.Parse(v)
+		if err != nil {
+			continue
+		}
+		if h := strings.ToLower(u.Hostname()); h != "" {
+			proxyHosts[h] = struct{}{}
+		}
+	}
+}
+
+// allowProxyHost registers an explicit --proxy host as a trusted
+// intermediary that may resolve to a private address (e.g. a local
+// proxy on 127.0.0.1). Must be called before any dials (it runs during
+// NewDownloader transport construction).
+func allowProxyHost(host string) {
+	if host == "" {
+		return
+	}
+	proxyHostsOnce.Do(loadEnvProxyHosts)
+	proxyHosts[strings.ToLower(host)] = struct{}{}
+}
+
 // envProxyHost reports whether hostport matches a proxy configured via
-// HTTP_PROXY / HTTPS_PROXY / ALL_PROXY (case-insensitive env names).
+// HTTP_PROXY / HTTPS_PROXY / ALL_PROXY or an explicit --proxy override.
 func envProxyHost(hostport string) bool {
 	host, _, err := net.SplitHostPort(hostport)
 	if err != nil {
 		host = hostport
 	}
 	host = strings.ToLower(host)
-	proxyHostsOnce.Do(func() {
-		proxyHosts = make(map[string]struct{})
-		for _, key := range []string{
-			"HTTP_PROXY", "http_proxy",
-			"HTTPS_PROXY", "https_proxy",
-			"ALL_PROXY", "all_proxy",
-		} {
-			v := os.Getenv(key)
-			if v == "" {
-				continue
-			}
-			// url.Parse needs a scheme; bare "host:port" is common.
-			if !strings.Contains(v, "://") {
-				v = "http://" + v
-			}
-			u, err := url.Parse(v)
-			if err != nil {
-				continue
-			}
-			if h := strings.ToLower(u.Hostname()); h != "" {
-				proxyHosts[h] = struct{}{}
-			}
-		}
-	})
+	proxyHostsOnce.Do(loadEnvProxyHosts)
 	_, ok := proxyHosts[host]
 	return ok
 }
@@ -192,7 +207,7 @@ func NewSafeClient(timeout time.Duration) *http.Client {
 	ac := AutoConfigure(0)
 	return &http.Client{
 		Timeout:       timeout,
-		Transport:     newAutoTransport(ac),
+		Transport:     newAutoTransport(ac, ""),
 		CheckRedirect: CheckRedirectSafe,
 	}
 }

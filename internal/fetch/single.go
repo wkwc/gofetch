@@ -17,7 +17,7 @@ func (d *Downloader) singleDownload(ctx context.Context, url string, total int64
 	// Match range path: never accept compressed bodies that would
 	// desync Content-Length / integrity checks (transport also disables
 	// transparent gzip, but proxies can still inject encoding).
-	req, err := newRequest(ctx, http.MethodGet, url, "")
+	req, err := d.newRequest(ctx, http.MethodGet, url, "")
 	if err != nil {
 		return err
 	}

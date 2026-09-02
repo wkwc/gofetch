@@ -77,3 +77,41 @@ func TestIpIsBlocked(t *testing.T) {
 		}
 	}
 }
+
+// TestAllowProxyHost verifies an explicit --proxy host (which may be a
+// private local proxy) becomes a trusted intermediary for dialing, so
+// DialContextAuto does not SSRF-block it.
+func TestAllowProxyHost(t *testing.T) {
+	host := "proxy.example.invalid"
+	if envProxyHost(host + ":8080") {
+		t.Fatalf("precondition: %q should not be a known proxy", host)
+	}
+	allowProxyHost(host)
+	if !envProxyHost(host + ":8080") {
+		t.Errorf("allowProxyHost(%q) did not make it a trusted proxy", host)
+	}
+	if envProxyHost("other.example.invalid:8080") {
+		t.Errorf("unrelated host became a trusted proxy")
+	}
+}
+
+// TestAllowProxyHostDialAuto verifies the full path: after registering an
+// explicit proxy host, DialContextAuto tries to connect to it rather than
+// rejecting it as private (the connection fails with "refused", not the
+// SSRF reject).
+func TestAllowProxyHostDialAuto(t *testing.T) {
+	prev := AllowLoopbackDial
+	AllowLoopbackDial = false
+	t.Cleanup(func() { AllowLoopbackDial = prev })
+
+	allowProxyHost("127.0.0.1")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := DialContextAuto(ctx, "tcp", net.JoinHostPort("127.0.0.1", "1"))
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), "private/internal") {
+		t.Fatalf("explicit proxy host must not be SSRF-blocked: %v", err)
+	}
+}

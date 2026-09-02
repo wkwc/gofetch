@@ -3,6 +3,7 @@ package fetch
 import (
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"runtime"
 	"time"
 )
@@ -109,16 +110,27 @@ func (ac *AutoConfig) Retune(totalSize int64) {
 // the syscall is silently a no-op via the SetsockoptInt return.
 
 // newAutoTransport builds an http.Transport with TCP keepalive,
-// proxy detection from environment, and optimized socket options
-// (TCP_NODELAY, TCP_FASTOPEN, TCP_NOTSENT_LOWAT, faster keepalive).
+// proxy detection from environment (or an explicit override), and
+// optimized socket options (TCP_NODELAY, TCP_FASTOPEN, TCP_NOTSENT_LOWAT,
+// faster keepalive).
 //
 // DialContextAuto pins each target dial to a non-private resolved IP
-// (DNS-rebinding resistant). Proxy hosts from HTTP(S)_PROXY/ALL_PROXY
-// are trusted operator config and may be private (e.g. 127.0.0.1).
-func newAutoTransport(ac AutoConfig) *http.Transport {
+// (DNS-rebinding resistant). Proxy hosts from HTTP(S)_PROXY/ALL_PROXY or
+// an explicit --proxy are trusted operator config and may be private
+// (e.g. 127.0.0.1).
+func newAutoTransport(ac AutoConfig, proxyURL string) *http.Transport {
+	proxy := http.ProxyFromEnvironment
+	if proxyURL != "" {
+		if u, err := url.Parse(proxyURL); err == nil {
+			proxy = http.ProxyURL(u)
+			// Trust the explicit proxy host for private dials (common for
+			// local proxies on 127.0.0.1), exactly like env-configured ones.
+			allowProxyHost(u.Hostname())
+		}
+	}
 	maxIdlePerHost := max(ac.Workers, 4)
 	tr := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 proxy,
 		DialContext:           DialContextAuto,
 		ForceAttemptHTTP2:     true,
 		DisableCompression:    true,

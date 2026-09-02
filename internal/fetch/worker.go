@@ -261,7 +261,7 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 
 	var lastErr error
 	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
-		req, err := newRequest(rctx, http.MethodGet, url, rangeHeader)
+		req, err := d.newRequest(rctx, http.MethodGet, url, rangeHeader)
 		if err != nil {
 			return err
 		}
@@ -418,6 +418,7 @@ func (d *Downloader) pumpBody(body io.Reader, f fileWriter, ws *workerState, sta
 		}
 		n, rerr := body.Read(dest)
 		if n > 0 {
+			d.rateLimit.wait(n)
 			if direct == nil && end >= 0 {
 				if remaining := end - cursor + 1; int64(n) > remaining {
 					n = int(remaining)

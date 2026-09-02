@@ -34,6 +34,11 @@ type Downloader struct {
 	manifest     *Manifest
 	startTime    time.Time
 
+	headers   []string
+	userAgent string
+	proxyURL  string
+	rateLimit *rateLimiter
+
 	lastResumeSaveMu sync.Mutex
 	lastResumeSave   time.Time
 	retryMu          sync.Mutex
@@ -55,11 +60,25 @@ type Options struct {
 	Verbose      bool
 	Quiet        bool
 	Mirrors      []string
+	// Headers are extra request headers ("Name: value") sent on every
+	// request (probes, ranges, single-stream).
+	Headers []string
+	// RateLimit caps aggregate download throughput in bytes/second
+	// (0 = unlimited). Applies per Downloader (per file).
+	RateLimit int64
+	// Proxy overrides the environment's HTTP(S)_PROXY / ALL_PROXY when set.
+	Proxy string
+	// UserAgent overrides the default gofetch User-Agent header.
+	UserAgent string
 }
 
 // NewDownloader constructs a Downloader with auto-configured defaults.
 func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	ac := AutoConfigure(0)
+	ua := opt.UserAgent
+	if ua == "" {
+		ua = defaultUserAgent
+	}
 	d := &Downloader{
 		url:           rawURL,
 		mirrors:       opt.Mirrors,
@@ -72,6 +91,10 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		autoConfig:    ac,
 		hashAlgo:      opt.HashAlgo,
 		expectedHash:  opt.ExpectedHash,
+		headers:       opt.Headers,
+		userAgent:     ua,
+		proxyURL:      opt.Proxy,
+		rateLimit:     newRateLimiter(opt.RateLimit),
 	}
 	// Only set resumePath when resume is enabled so saves/tickers
 	// and sidecar cleanup stay fully disabled under --no-resume.
@@ -84,7 +107,7 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	// overall deadline is the caller's context.
 	d.client = &http.Client{
 		Timeout:       0,
-		Transport:     newAutoTransport(ac),
+		Transport:     newAutoTransport(ac, opt.Proxy),
 		CheckRedirect: CheckRedirectSafe,
 	}
 	return d

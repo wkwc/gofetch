@@ -40,7 +40,7 @@ func (d *Downloader) probeURL(ctx context.Context, rawURL string) (probeInfo, er
 // probeRequest issues a single probe request (HEAD or range GET), drains
 // the body so the connection can be reused, and returns the response.
 func (d *Downloader) probeRequest(ctx context.Context, method, rawURL, rangeHeader string) (*http.Response, error) {
-	req, err := newRequest(ctx, method, rawURL, rangeHeader)
+	req, err := d.newRequest(ctx, method, rawURL, rangeHeader)
 	if err != nil {
 		return nil, err
 	}
@@ -152,21 +152,27 @@ func parseUint(s string) (int64, error) {
 	return n, nil
 }
 
-// userAgent is a fixed, sensible default.
-const userAgent = "gofetch/1.0"
+// defaultUserAgent is the User-Agent unless overridden via Options.
+const defaultUserAgent = "gofetch/1.0"
 
 // newRequest builds an HTTP request with gofetch's fixed headers: the
-// user agent and an explicit Accept-Encoding: identity so a proxy can
-// never inject compression that would desync Range offsets or integrity
-// checks (the transport already disables transparent gzip). rangeHeader
-// may be empty for non-range requests.
-func newRequest(ctx context.Context, method, url, rangeHeader string) (*http.Request, error) {
+// (possibly overridden) user agent, an explicit Accept-Encoding: identity
+// so a proxy can never inject compression that would desync Range offsets
+// or integrity checks (the transport already disables transparent gzip),
+// and any user-supplied custom headers. rangeHeader may be empty for
+// non-range requests.
+func (d *Downloader) newRequest(ctx context.Context, method, url, rangeHeader string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", d.userAgent)
 	req.Header.Set("Accept-Encoding", "identity")
+	for _, h := range d.headers {
+		if k, v, ok := strings.Cut(h, ":"); ok {
+			req.Header.Set(strings.TrimSpace(k), strings.TrimSpace(v))
+		}
+	}
 	if rangeHeader != "" {
 		req.Header.Set("Range", rangeHeader)
 	}
