@@ -1,7 +1,6 @@
 package fetch
 
 import (
-	"math"
 	"math/rand/v2"
 	"net/http"
 	"runtime"
@@ -43,7 +42,7 @@ func scaleWorkers(totalSize int64, cores int) int {
 	}
 	// Aim for ~8 chunks per worker so workers stay busy without
 	// idle spin on giant files.
-	chunkCount := totalSize / (1 << 20)
+	chunkCount := totalSize / minSeedChunk
 	if chunkCount <= 0 {
 		chunkCount = 1
 	}
@@ -79,10 +78,14 @@ func scaleBufSize(totalSize int64) int {
 }
 
 // Backoff computes the sleep duration for retry n (0-indexed).
-// Exponential growth, capped at RetryCap, with up to 25% upward jitter.
+// Exponential growth (2^n via shift), capped at RetryCap, with up to
+// 25% upward jitter. n is guarded so an out-of-range caller caps
+// instead of wrapping (RetryMax is bounded far below 62 in practice).
 func (ac *AutoConfig) Backoff(n int) time.Duration {
-	exp := math.Pow(2, float64(n))
-	d := time.Duration(float64(ac.RetryBase) * exp)
+	if n > 62 {
+		n = 62
+	}
+	d := ac.RetryBase << n
 	if d > ac.RetryCap || d < 0 {
 		d = ac.RetryCap
 	}
@@ -101,14 +104,9 @@ func (ac *AutoConfig) Retune(totalSize int64) {
 // TCP_NOTSENT_LOWAT (0x19) is not exported by the linux syscall
 // package as of Go 1.26. The previous 0x17 was TCP_FASTOPEN on
 // every arch, so we were setting FASTOPEN twice and never touching
-// NOTSENT_LOWAT. Defined here so future kernels can adopt these
-// without losing our perf-tuning; on unsupported kernels the
-// syscall is silently a no-op via the SetsockoptInt return.
-const (
-	tcpFastOpen      = 23
-	tcpNotSentLowat  = 25
-	tcpNotSentLowatV = 131072
-)
+// NOTSENT_LOWAT. Defined in sockopts_linux.go so future kernels can
+// adopt these without losing our perf-tuning; on unsupported kernels
+// the syscall is silently a no-op via the SetsockoptInt return.
 
 // newAutoTransport builds an http.Transport with TCP keepalive,
 // proxy detection from environment, and optimized socket options

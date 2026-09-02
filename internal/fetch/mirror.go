@@ -40,13 +40,9 @@ func (d *Downloader) probeURL(ctx context.Context, rawURL string) (probeInfo, er
 // probeRequest issues a single probe request (HEAD or range GET), drains
 // the body so the connection can be reused, and returns the response.
 func (d *Downloader) probeRequest(ctx context.Context, method, rawURL, rangeHeader string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, nil)
+	req, err := newRequest(ctx, method, rawURL, rangeHeader)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	if rangeHeader != "" {
-		req.Header.Set("Range", rangeHeader)
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
@@ -158,3 +154,21 @@ func parseUint(s string) (int64, error) {
 
 // userAgent is a fixed, sensible default.
 const userAgent = "gofetch/1.0"
+
+// newRequest builds an HTTP request with gofetch's fixed headers: the
+// user agent and an explicit Accept-Encoding: identity so a proxy can
+// never inject compression that would desync Range offsets or integrity
+// checks (the transport already disables transparent gzip). rangeHeader
+// may be empty for non-range requests.
+func newRequest(ctx context.Context, method, url, rangeHeader string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept-Encoding", "identity")
+	if rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
+	}
+	return req, nil
+}

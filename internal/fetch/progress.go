@@ -48,20 +48,11 @@ func humanBytes(n int64) string {
 	}
 }
 
-// formatFixed formats f with digits decimal places, rounding half away
-// from zero and zero-padding the fraction.
+// formatFixed formats f with digits decimal places (round half to even,
+// matching strconv). Delegate to the stdlib to avoid a hand-rolled
+// float formatter.
 func formatFixed(f float64, digits int) string {
-	scale := 1.0
-	for i := 0; i < digits; i++ {
-		scale *= 10
-	}
-	f += 0.5 / scale
-	whole := int64(f)
-	frac := strconv.FormatInt(int64((f-float64(whole))*scale), 10)
-	for len(frac) < digits {
-		frac = "0" + frac
-	}
-	return strconv.FormatInt(whole, 10) + "." + frac
+	return strconv.FormatFloat(f, 'f', digits, 64)
 }
 
 // formatDuration formats a duration in human-readable form.

@@ -90,9 +90,24 @@ func (d *Downloader) saveResume(url string, completed []Task, states []*workerSt
 	if err != nil {
 		return err
 	}
-	tmp := d.resumePath + ".tmp"
-	// Clear a stale .tmp from a prior crash so O_EXCL cannot permanently
-	// disable resume saves for the rest of the download.
+	return atomicWriteFile(d.resumePath, data)
+}
+
+// atomicWriteFile writes data to path atomically (tmp + fsync + rename)
+// and fsyncs the parent directory for crash durability.
+//
+// The tmp is cleared first so O_EXCL cannot permanently disable writes
+// after a prior crash orphaned a .tmp. Parent fsync: a renamed file's
+// metadata is only durable if the directory containing the rename's new
+// link is fsynced (see rename(2) NOTES). filepath.Dir never returns ""
+// (returns "." for relative paths). A failed parent fsync is returned so
+// callers don't treat the save as durable-succeeded, but the rename is
+// still attempted: a possibly-durable file is strictly better than a
+// guaranteed orphan .tmp. Parent open failures are quiet because some
+// environments (sandboxed CI, read-only root) cannot fsync the parent
+// but can still rename within it.
+func atomicWriteFile(path string, data []byte) error {
+	tmp := path + ".tmp"
 	_ = os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
@@ -112,29 +127,12 @@ func (d *Downloader) saveResume(url string, completed []Task, states []*workerSt
 		_ = os.Remove(tmp)
 		return err
 	}
-	// fsync parent dir for crash durability: a renamed file's metadata
-	// is only durable if the directory containing the rename's new link
-	// is fsynced. See AIO/APFS/ext4 docs and the rename(2) NOTES section.
-	// filepath.Dir never returns "" (returns "." for relative paths), so
-	// the historical `if parent != ""` guard was dead code — removed.
-	// We open the parent, fsync it, and Propagate any fsync error so the
-	// caller doesn't treat this save as durable-succeeded: a silent skip
-	// here would defeat the entire purpose of the resume file. The rename
-	// is still attempted after a failed dir-fsync, because a possibly-
-	// durable .resume is strictly better than a guaranteed orphan .tmp
-	// and no rename at all. Parent open failures are quiet because some
-	// environments (sandboxed CI, read-only root) cannot fsync the parent
-	// but can still rename within it, and that is not actionable per save.
-	parent := filepath.Dir(d.resumePath)
 	var dirFsyncErr error
-	if df, err := os.Open(parent); err == nil {
+	if df, err := os.Open(filepath.Dir(path)); err == nil {
 		dirFsyncErr = df.Sync()
 		_ = df.Close()
-		if dirFsyncErr != nil {
-			d.vlog("resume: parent dir fsync failed (%v); rename will proceed but is not crash-durable", dirFsyncErr)
-		}
 	}
-	if err := os.Rename(tmp, d.resumePath); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
 	return dirFsyncErr
@@ -219,13 +217,19 @@ func (d *Downloader) maybeSaveResume(force bool, url string, states []*workerSta
 		return
 	}
 	if !force {
-		last := d.lastResumeSave.Load()
-		if last != 0 && time.Duration(time.Now().UnixNano()-last) < time.Second {
+		// Monotonic time.Time (not raw UnixNano): a wall-clock jump cannot
+		// turn a just-saved state into "long ago" or vice versa.
+		d.lastResumeSaveMu.Lock()
+		should := d.lastResumeSave.IsZero() || time.Since(d.lastResumeSave) >= time.Second
+		d.lastResumeSaveMu.Unlock()
+		if !should {
 			return
 		}
 	}
 	if d.saveResume(url, d.snapshotCompleted(), states) == nil {
-		d.lastResumeSave.Store(time.Now().UnixNano())
+		d.lastResumeSaveMu.Lock()
+		d.lastResumeSave = time.Now()
+		d.lastResumeSaveMu.Unlock()
 	}
 }
 

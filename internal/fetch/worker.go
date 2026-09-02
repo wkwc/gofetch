@@ -16,6 +16,10 @@ import (
 
 const maxHTTPStatusRetries = 10
 
+// retryAfterDefault is the backoff applied when a retryable HTTP
+// response omits a usable Retry-After header.
+const retryAfterDefault = 5 * time.Second
+
 // errRangeNotSupported is returned when a Range GET receives a non-partial
 // response (typically HTTP 200 OK) despite the server advertising
 // Accept-Ranges. Callers fall back to single-stream rather than treating
@@ -108,7 +112,9 @@ func isIdentity(enc string) bool {
 }
 
 // parseRetryAfter parses the RFC 7231 Retry-After header.
-// Returns 0 if missing or unparseable as a seconds integer.
+// Returns 0 if the header is missing; retryAfterDefault for an
+// unparseable or out-of-range seconds integer. Callers apply their
+// own default for the missing case.
 func parseRetryAfter(h http.Header) time.Duration {
 	v := h.Get("Retry-After")
 	if v == "" {
@@ -117,7 +123,7 @@ func parseRetryAfter(h http.Header) time.Duration {
 	if secs, err := strconv.Atoi(v); err == nil && secs > 0 && secs <= 300 {
 		return time.Duration(secs) * time.Second
 	}
-	return 5 * time.Second
+	return retryAfterDefault
 }
 
 func (d *Downloader) workerLoop(ctx context.Context, url string, ws *workerState, queue *Queue, f fileWriter, saveC chan<- struct{}) {
@@ -255,15 +261,10 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 
 	var lastErr error
 	for attempt := 0; attempt <= maxHTTPStatusRetries; attempt++ {
-		req, err := http.NewRequestWithContext(rctx, http.MethodGet, url, nil)
+		req, err := newRequest(rctx, http.MethodGet, url, rangeHeader)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Range", rangeHeader)
-		req.Header.Set("User-Agent", userAgent)
-		// Explicit identity + DisableCompression on the transport:
-		// never let a proxy inject gzip that would misalign Range offsets.
-		req.Header.Set("Accept-Encoding", "identity")
 
 		resp, err := d.client.Do(req)
 		if err != nil {
@@ -273,7 +274,7 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 		if isRetryableHTTP(resp.StatusCode) {
 			wait := parseRetryAfter(resp.Header)
 			if wait == 0 {
-				wait = 5 * time.Second
+				wait = retryAfterDefault
 			}
 			drainAndClose(resp.Body)
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)

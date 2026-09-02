@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -35,9 +34,10 @@ type Downloader struct {
 	manifest     *Manifest
 	startTime    time.Time
 
-	lastResumeSave atomic.Int64
-	retryMu        sync.Mutex
-	retryCount     map[Task]int
+	lastResumeSaveMu sync.Mutex
+	lastResumeSave   time.Time
+	retryMu          sync.Mutex
+	retryCount       map[Task]int
 
 	// completed accumulates finished ranges for resume sidecars.
 	// Seeded from loadResume; updated on every successful task so

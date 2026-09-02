@@ -88,6 +88,17 @@ func tryConnDeadline(r io.Reader) connDeadliner {
 	return nil
 }
 
+// stopDrain stops timer t, draining any already-fired value so the
+// timer can be Reset or reused without a stale fire firing later.
+func stopDrain(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+}
+
 func newIdleBody(ctx context.Context, r io.Reader, idle time.Duration) *idleBody {
 	if idle <= 0 {
 		idle = defaultBodyIdle
@@ -96,12 +107,7 @@ func newIdleBody(ctx context.Context, r io.Reader, idle time.Duration) *idleBody
 	if b.conn == nil {
 		b.useGo = true
 		b.timer = time.NewTimer(idle)
-		if !b.timer.Stop() {
-			select {
-			case <-b.timer.C:
-			default:
-			}
-		}
+		stopDrain(b.timer)
 		b.timer.Reset(idle)
 		b.reqCh = make(chan readReq, 1)
 		b.stopCh = make(chan struct{})
@@ -187,12 +193,7 @@ func (b *idleBody) Read(p []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 
-	if !b.timer.Stop() {
-		select {
-		case <-b.timer.C:
-		default:
-		}
-	}
+	stopDrain(b.timer)
 	b.timer.Reset(b.idle)
 
 	select {
