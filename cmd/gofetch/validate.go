@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/url"
@@ -16,7 +17,8 @@ import (
 // the URL — an attacker who can fail DNS resolution (or trick
 // getaddrinfo into short-timeout behaviour) must not be able to bypass
 // the internal-IP check by exploiting a transient lookup error.
-func validateURL(rawURL string) error {
+// ctx bounds the DNS lookup so a slow resolver cannot hang startup.
+func validateURL(ctx context.Context, rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("invalid URL: %s", rawURL)
@@ -28,7 +30,7 @@ func validateURL(rawURL string) error {
 	// multicast / unspecified IPs. Combined with DialContextAuto (which
 	// pins each dial to a non-private resolved IP), DNS rebinding cannot
 	// pivot the connection into an internal host mid-stream.
-	if fetch.HostIsPrivate(u.Hostname()) {
+	if fetch.HostIsPrivateContext(ctx, u.Hostname()) {
 		return fmt.Errorf("URL host %q resolves to a private/internal address (SSRF guard)",
 			u.Hostname())
 	}
@@ -39,7 +41,7 @@ func validateURL(rawURL string) error {
 // hostnames get https:// prepended so `-m mirror1.com,mirror2.com` works
 // as documented. Each mirror is validated with the same SSRF guards as the
 // primary URL.
-func normalizeMirrors(flag string) ([]string, error) {
+func normalizeMirrors(ctx context.Context, flag string) ([]string, error) {
 	if flag == "" {
 		return nil, nil
 	}
@@ -53,7 +55,7 @@ func normalizeMirrors(flag string) ([]string, error) {
 		if !strings.Contains(m, "://") {
 			m = "https://" + m
 		}
-		if err := validateURL(m); err != nil {
+		if err := validateURL(ctx, m); err != nil {
 			return nil, fmt.Errorf("mirror %d: %w", i+1, err)
 		}
 		mirrors = append(mirrors, m)

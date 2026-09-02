@@ -92,7 +92,12 @@ func run(args []string) int {
 		fetch.AllowLoopbackDial = true
 	}
 
-	mirrors, err := normalizeMirrors(*mirrorsFlag)
+	// Signal context is created early so Ctrl-C/SIGTERM/SIGHUP also
+	// interrupt URL-validation DNS lookups, not just the download.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer stop()
+
+	mirrors, err := normalizeMirrors(ctx, *mirrorsFlag)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
@@ -116,7 +121,7 @@ func run(args []string) int {
 	rawURLs := fs.Args()
 	// Validate every URL up front (all-or-nothing), like the old CLI.
 	for _, u := range rawURLs {
-		if err := validateURL(u); err != nil {
+		if err := validateURL(ctx, u); err != nil {
 			fmt.Fprintln(os.Stderr, "gofetch:", err)
 			return 1
 		}
@@ -127,9 +132,6 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
-	defer stop()
 
 	exit := 0
 	for i, rawURL := range rawURLs {

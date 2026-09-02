@@ -95,14 +95,14 @@ func TestNormalizeMirrors(t *testing.T) {
 	t.Cleanup(func() { fetch.AllowLoopbackDial = prev })
 
 	t.Run("empty", func(t *testing.T) {
-		got, err := normalizeMirrors("")
+		got, err := normalizeMirrors(t.Context(), "")
 		if err != nil || got != nil {
 			t.Fatalf("empty: got=%v err=%v, want nil/nil", got, err)
 		}
 	})
 
 	t.Run("bare hostnames get https", func(t *testing.T) {
-		got, err := normalizeMirrors("example.com, www.example.com")
+		got, err := normalizeMirrors(t.Context(), "example.com, www.example.com")
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -118,7 +118,7 @@ func TestNormalizeMirrors(t *testing.T) {
 	})
 
 	t.Run("explicit scheme preserved", func(t *testing.T) {
-		got, err := normalizeMirrors("http://example.com")
+		got, err := normalizeMirrors(t.Context(), "http://example.com")
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
@@ -128,7 +128,7 @@ func TestNormalizeMirrors(t *testing.T) {
 	})
 
 	t.Run("private mirror rejected", func(t *testing.T) {
-		_, err := normalizeMirrors("127.0.0.1")
+		_, err := normalizeMirrors(t.Context(), "127.0.0.1")
 		if err == nil {
 			t.Fatal("expected SSRF rejection of loopback mirror")
 		}
