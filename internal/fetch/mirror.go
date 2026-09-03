@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // drainLimit caps how much of a rejected response body we will read
@@ -29,8 +30,33 @@ type probeInfo struct {
 }
 
 // probeURL tries HEAD first; if HEAD returns 405/400 we fall back to a
-// 1-byte range GET.
+// 1-byte range GET. Probe requests are retried on transient HTTP statuses
+// (429/5xx) with a short backoff — a rate-limited or briefly-busy server
+// must not fail the whole download on a single probe, matching the range
+// path's retry behavior.
 func (d *Downloader) probeURL(ctx context.Context, rawURL string) (probeInfo, error) {
+	var (
+		info probeInfo
+		err  error
+	)
+	for attempt := 0; attempt < 3; attempt++ {
+		info, err = d.probeOnce(ctx, rawURL)
+		if err == nil || !isRetryableProbe(err) {
+			return info, err
+		}
+		d.vlog("probe transient error (%v), retrying", err)
+		// Probes are cheap; a 1s backoff keeps a rate-limited server from
+		// failing the whole download without stalling on a slow one.
+		if !sleepCtx(ctx, time.Second) {
+			return info, ctx.Err()
+		}
+	}
+	return info, err
+}
+
+// probeOnce performs one HEAD probe (falling back to a range GET when the
+// server rejects HEAD).
+func (d *Downloader) probeOnce(ctx context.Context, rawURL string) (probeInfo, error) {
 	if info, ok, err := d.probeHeadURL(ctx, rawURL); ok || err != nil {
 		return info, err
 	}
@@ -108,8 +134,28 @@ func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probe
 	}
 }
 
+// httpStatusError carries the HTTP status of a failed probe so callers can
+// distinguish transient (429/5xx) failures, which are retried, from
+// permanent ones.
+type httpStatusError struct {
+	method string
+	url    string
+	code   int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("%s %s: status %d", e.method, e.url, e.code)
+}
+
 func httpError(method, url string, code int) error {
-	return fmt.Errorf("%s %s: status %d", method, url, code)
+	return &httpStatusError{method: method, url: url, code: code}
+}
+
+// isRetryableProbe reports whether a probe error is a transient HTTP
+// status (429/5xx) worth retrying.
+func isRetryableProbe(err error) bool {
+	var he *httpStatusError
+	return errors.As(err, &he) && isRetryableHTTP(he.code)
 }
 
 // parseContentRange parses "bytes START-END/TOTAL". Returns ok=false for

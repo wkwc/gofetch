@@ -135,6 +135,40 @@ func TestEndToEndNoResume(t *testing.T) {
 	}
 }
 
+// TestProbeRetriesTransientStatus verifies the probe retries a transient
+// HTTP status (429) instead of failing the download on the first attempt.
+func TestProbeRetriesTransientStatus(t *testing.T) {
+	payload := makePayload(128 * 1024)
+	var headAttempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead && headAttempts.Add(1) == 1 {
+			http.Error(w, "busy", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "out.bin")
+	d := NewDownloader(srv.URL, out, Options{Quiet: true, NoResume: true})
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("Download after 429 retry: %v", err)
+	}
+	if n := headAttempts.Load(); n < 2 {
+		t.Errorf("expected the probe to retry after 429, got %d HEAD attempts", n)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
 // TestProbeHeadUnsupported verifies that when a server returns 405 for HEAD,
 // the probe correctly falls back to a 1-byte range GET to detect range support.
 func TestProbeHeadUnsupported(t *testing.T) {
