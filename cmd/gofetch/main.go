@@ -168,9 +168,15 @@ func run(args []string) int {
 		exit := 0
 		for _, u := range rawURLs {
 			p, err := fetch.ProbeURL(ctx, u)
+			// Would -h auto verify this URL? Local sidecar first, then the
+			// remote checksum detection.
+			cksum, _, _ := autoDetectLocalSidecar(urlBaseName(u))
+			if cksum == "" {
+				cksum, _, _ = autoDetectRemoteSidecar(ctx, u)
+			}
 			if err != nil {
 				if *jsonOut {
-					emitProbeJSON(u, fetch.ProbeInfo{}, err)
+					emitProbeJSON(u, fetch.ProbeInfo{}, err, "")
 				} else {
 					fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", u, err)
 				}
@@ -178,17 +184,22 @@ func run(args []string) int {
 				continue
 			}
 			if *jsonOut {
-				emitProbeJSON(u, p, nil)
+				emitProbeJSON(u, p, nil, cksum)
 			} else {
 				ranges := "no"
 				if p.SupportsRanges {
 					ranges = "yes"
+				}
+				checksum := "none"
+				if cksum != "" {
+					checksum = cksum + " (auto)"
 				}
 				fmt.Printf("url:    %s\n", u)
 				fmt.Printf("size:   %s\n", fetch.HumanBytes(p.Total))
 				fmt.Printf("ranges: %s\n", ranges)
 				fmt.Printf("workers: %d\n", p.Workers)
 				fmt.Printf("buf:    %s\n", fetch.HumanBytes(int64(p.BufSize)))
+				fmt.Printf("checksum: %s\n", checksum)
 				fmt.Println()
 			}
 		}
@@ -283,12 +294,13 @@ type probeJSON struct {
 	SupportsRanges bool   `json:"supports_ranges,omitempty"`
 	Workers        int    `json:"workers,omitempty"`
 	BufSize        int    `json:"buf_size,omitempty"`
+	Checksum       string `json:"checksum,omitempty"` // algo -h auto would find ("" = none)
 	Error          string `json:"error,omitempty"`
 }
 
 // emitProbeJSON prints one probe result (or its error) as a JSON line.
 // Uses encoding/json (not fmt %q) so arbitrary URL bytes stay valid JSON.
-func emitProbeJSON(rawURL string, p fetch.ProbeInfo, err error) {
+func emitProbeJSON(rawURL string, p fetch.ProbeInfo, err error, checksum string) {
 	out := probeJSON{URL: rawURL}
 	if err != nil {
 		out.Error = err.Error()
@@ -297,6 +309,7 @@ func emitProbeJSON(rawURL string, p fetch.ProbeInfo, err error) {
 		out.SupportsRanges = p.SupportsRanges
 		out.Workers = p.Workers
 		out.BufSize = p.BufSize
+		out.Checksum = checksum
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(out)
 }

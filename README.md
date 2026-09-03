@@ -40,8 +40,8 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **Headers** | `-H "Name: value"` | Send a custom header (repeatable; auth/cookies) |
 | **User-Agent** | `-A VALUE` | Override the default `gofetch/1.0` User-Agent (alias: `--user-agent`) |
 | **Rate limit** | `--limit-rate` | Cap aggregate download speed per file (`500k`, `2M`, `1G`) |
-| **Probe** | `--info` | Print size / range support / planned workers without downloading |
-| **JSON probe** | `--info --json` | Emit one JSON object per URL (`{"url","size","supports_ranges","workers","buf_size"}`) |
+| **Probe** | `--info` | Print size / range support / planned workers / whether `-h auto` would find a checksum, without downloading |
+| **JSON probe** | `--info --json` | Emit one JSON object per URL (`url`, `size`, `supports_ranges`, `workers`, `buf_size`, `checksum`) |
 | **Workers** | `-x N` / `--workers` | Override the auto-tuned worker count (0 = auto) |
 | **Buffer** | `--buf-size` | Override the auto-tuned per-worker read buffer (`64k`, `1M`) |
 | **Retries** | `--max-retries` | Override the per-chunk retry budget (0 = auto, default 10) |

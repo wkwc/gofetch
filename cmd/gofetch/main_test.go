@@ -766,3 +766,39 @@ func TestAutoDetectLocalSidecarContainer(t *testing.T) {
 		t.Errorf("unlisted file: algo=%q hex=%q err=%v, want empty", algo, hex, err)
 	}
 }
+
+func TestRunInfoChecksum(t *testing.T) {
+	payload := []byte("iso")
+	sh := sha256.Sum256(payload)
+	hexHash := hex.EncodeToString(sh[:])
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/d/file.iso":
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+		case "/d/sha256sums.txt":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(hexHash + "  file.iso\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	// With a checksum container: JSON reports the algo.
+	out := captureStdout(t, func() {
+		if code := run([]string{"--allow-loopback", "--info", "--json", srv.URL + "/d/file.iso"}); code != 0 {
+			t.Errorf("run(--info --json) = %d, want 0", code)
+		}
+	})
+	var got struct {
+		Checksum string `json:"checksum"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &got); err != nil {
+		t.Fatalf("bad JSON: %v\n%s", err, out)
+	}
+	if got.Checksum != "sha256" {
+		t.Errorf("checksum = %q, want sha256", got.Checksum)
+	}
+}

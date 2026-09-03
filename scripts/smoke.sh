@@ -101,6 +101,7 @@ runx 0 -- -help
 
 echo "== probe =="
 runl 0 -- --info "$URL"
+"$GOFETCH" --allow-loopback --info "$URL" 2>/dev/null | grep -q 'checksum: none' && ok "--info reports no checksum (none)" || bad "--info checksum line"
 runl 0 -- --info --json "$URL"
 "$GOFETCH" --allow-loopback --info --json "$URL" 2>/dev/null | grep -q '"supports_ranges"' && ok "--info --json valid JSON" || bad "--info --json"
 runl 1 -- --json "$URL"
