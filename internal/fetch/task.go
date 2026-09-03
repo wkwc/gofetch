@@ -81,6 +81,13 @@ func (q *Queue) Pop() (Task, bool) {
 	return t, true
 }
 
+// Len returns the number of queued tasks.
+func (q *Queue) Len() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.count
+}
+
 // growForced doubles capacity (or grows to count+1), ignoring maxCap.
 // Used when we must accept a task rather than drop or livelock.
 func (q *Queue) growForced() {

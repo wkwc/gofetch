@@ -753,3 +753,30 @@ func TestHTTPSDownloadWithCACert(t *testing.T) {
 		t.Error("expected requests to arrive over HTTP/2 (ALPN), got HTTP/1.x")
 	}
 }
+
+// TestInterruptOnCompleteFileIsSuccess pins the misleading-interrupt bug:
+// a Ctrl-C that races a download's completion must not turn a fully-written
+// file into an "interrupted; partial progress saved" error. The race window
+// (last worker finishes vs the signal) is tiny, so this runs many trials and
+// asserts the invariant: a complete file implies a nil error.
+func TestInterruptOnCompleteFileIsSuccess(t *testing.T) {
+	payload := makePayload(256 * 1024)
+	srv := newRangeServer(t, payload, nil)
+	for i := 0; i < 300; i++ {
+		out := filepath.Join(t.TempDir(), "out.bin")
+		d := NewDownloader(srv.URL, out, Options{Quiet: true, NoResume: true})
+		ctx, cancel := context.WithCancel(context.Background())
+		// Fire the cancel shortly after start, racing the completion.
+		timer := time.AfterFunc(300*time.Microsecond, cancel)
+		err := d.Download(ctx)
+		timer.Stop()
+		got, _ := os.ReadFile(out)
+		complete := len(got) == len(payload)
+		if complete && err != nil {
+			t.Fatalf("trial %d: complete %d-byte file reported error %v", i, len(got), err)
+		}
+		if !complete && err == nil {
+			t.Fatalf("trial %d: incomplete %d-byte file reported success", i, len(got))
+		}
+	}
+}

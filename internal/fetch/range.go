@@ -112,12 +112,23 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 		resumeC = resumeTicker.C
 	}
 
-	done := make(chan struct{})
+	// done reports true when every byte was written before any cancellation
+	// arrived (a late Ctrl-C on a finished download is a success, not an
+	// interrupt — the misleading "partial progress saved" message).
+	done := make(chan bool)
 	go func() {
 		workers.Wait()
 		stopMonitor()
 		monitorWG.Wait()
-		if ctx.Err() == nil {
+		// All workers finished. The file is complete if the queue is empty
+		// (every task processed) even when the context fired during the final
+		// tasks; a non-empty queue means a signal interrupted real work.
+		fully := ctx.Err() == nil
+		if !fully && queue.Len() == 0 {
+			fully = true
+		}
+		if fully {
+			// Serial drain of any leftover (probe lied about ranges etc).
 			for {
 				task, ok := queue.Pop()
 				if !ok {
@@ -127,6 +138,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 					for _, ws := range states {
 						ws.setErr(err)
 					}
+					fully = false
 					break
 				}
 				if d.manifest != nil {
@@ -134,6 +146,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 						for _, ws := range states {
 							ws.setErr(err)
 						}
+						fully = false
 						break
 					}
 				}
@@ -143,7 +156,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 		if saveC != nil {
 			close(saveC)
 		}
-		close(done)
+		done <- fully
 	}()
 
 	if d.manifest != nil {
@@ -156,13 +169,19 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 			if d.resumePath != "" {
 				d.maybeSaveResume(true, url, states)
 			}
-			<-done
+			if fully := <-done; fully {
+				// The whole file was written before the signal — success.
+				return nil
+			}
 			return ctx.Err()
-		case <-done:
+		case fully := <-done:
 			for _, ws := range states {
 				if err, ok := ws.err(); ok && err != nil {
 					return err
 				}
+			}
+			if !fully {
+				return ctx.Err()
 			}
 			return nil
 		case <-saveC:
