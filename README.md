@@ -371,11 +371,14 @@ flags** to hit peak speed, uses sparse files (works where aria2c's
 `fallocate` preallocation fails under disk quotas), and auto-verifies with
 `-h auto`.
 
-The loopback advantage comes from:
-
-1. **Zero-copy writes.** Each HTTP read is performed directly into an `mmap(2)`'d slice of the output file. No intermediate buffer + memcpy.
-2. **Lock-free progress.** No global CAS contention — the progress display sums per-worker `bytesDone` counters on demand.
-3. **Tight loop.** No `pwrite(2)` per ~64 KiB chunk (the old path). With mmap the kernel pages in lazily and our writes land in the page cache directly.
+gofetch is fast because it fetches many ranges in parallel and auto-tunes
+the worker count, buffer, and retry budget from the server's
+`Content-Length` — not because of its write path. Measured on real
+workloads, the two write backends are equivalent: the `mmap(2)` writer and
+the native `pwrite` writer both saturate real links (~13 MB/s throttled
+1.5 GB ISO: identical wall time and ~7 MiB peak RSS) and both saturate the
+page cache on loopback. `mmap` remains the default; pass `--no-mmap` for
+filesystems where memory-mapping misbehaves (NFS, FUSE, overcommit limits).
 
 ## CI/CD
 
