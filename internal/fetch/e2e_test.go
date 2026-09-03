@@ -771,12 +771,14 @@ func TestInterruptOnCompleteFileIsSuccess(t *testing.T) {
 		err := d.Download(ctx)
 		timer.Stop()
 		got, _ := os.ReadFile(out)
-		complete := len(got) == len(payload)
+		// A sparse file reaches full length by writing only its last byte,
+		// so completeness is judged by CONTENT, not size.
+		complete := bytes.Equal(got, payload)
 		if complete && err != nil {
-			t.Fatalf("trial %d: complete %d-byte file reported error %v", i, len(got), err)
+			t.Fatalf("trial %d: byte-complete file reported error %v", i, err)
 		}
 		if !complete && err == nil {
-			t.Fatalf("trial %d: incomplete %d-byte file reported success", i, len(got))
+			t.Fatalf("trial %d: byte-incomplete file reported success", i)
 		}
 	}
 }

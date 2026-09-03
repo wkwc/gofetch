@@ -115,9 +115,9 @@ func TestNormalizeMirrors(t *testing.T) {
 	// run() tests enable fetch.AllowLoopbackDial via --allow-loopback;
 	// the SSRF-rejection cases below need it disabled. Save/restore so
 	// shuffled test order cannot leak state between tests.
-	prev := fetch.AllowLoopbackDial
-	fetch.AllowLoopbackDial = false
-	t.Cleanup(func() { fetch.AllowLoopbackDial = prev })
+	prev := fetch.AllowLoopbackDial.Load()
+	fetch.AllowLoopbackDial.Store(false)
+	t.Cleanup(func() { fetch.AllowLoopbackDial.Store(prev) })
 
 	t.Run("empty", func(t *testing.T) {
 		got, err := normalizeMirrors(t.Context(), "")

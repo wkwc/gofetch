@@ -100,6 +100,13 @@ func (d *Downloader) pumpBody(ctx context.Context, body io.Reader, f fileWriter,
 			}
 		}
 		if rerr != nil {
+			if end >= 0 && cursor > end {
+				// The final read delivered the last bytes of the range and
+				// also returned an error (commonly context.Canceled when a
+				// signal races completion). The range is fully written, so
+				// the trailing error is spurious — report success.
+				return cursor - start, nil
+			}
 			if errors.Is(rerr, io.EOF) {
 				if strict && end >= 0 && cursor <= end {
 					// Wrap io.ErrUnexpectedEOF so isTransient() (which

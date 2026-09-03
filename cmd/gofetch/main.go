@@ -100,7 +100,7 @@ func run(args []string) int {
 		// Explicit opt-in for the repo's own benchmark scripts and local
 		// testing against a benchserver on 127.0.0.1. Never pass this for
 		// URLs you do not trust. SECURITY.md documents the tradeoff.
-		fetch.AllowLoopbackDial = true
+		fetch.AllowLoopbackDial.Store(true)
 	}
 
 	// Signal context is created early so Ctrl-C/SIGTERM/SIGHUP also

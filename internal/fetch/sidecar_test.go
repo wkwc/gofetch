@@ -111,7 +111,7 @@ func TestFetchSidecarHashTLS(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// The SSRF guard needs the loopback host to be permitted (test default).
-	if !AllowLoopbackDial {
+	if !AllowLoopbackDial.Load() {
 		t.Fatal("AllowLoopbackDial must be true in tests")
 	}
 	client := &http.Client{Transport: &http.Transport{

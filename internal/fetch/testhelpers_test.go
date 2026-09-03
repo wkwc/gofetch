@@ -18,7 +18,7 @@ import (
 
 func init() {
 	// httptest binds 127.0.0.1; production SSRF dial still blocks loopback.
-	AllowLoopbackDial = true
+	AllowLoopbackDial.Store(true)
 }
 
 // makePayload generates n random bytes for test fixtures.

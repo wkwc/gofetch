@@ -9,9 +9,9 @@ import (
 
 func TestDialContextSafeBlocksPrivate(t *testing.T) {
 	// Save and restore the test default (httptest needs loopback).
-	prev := AllowLoopbackDial
-	AllowLoopbackDial = false
-	t.Cleanup(func() { AllowLoopbackDial = prev })
+	prev := AllowLoopbackDial.Load()
+	AllowLoopbackDial.Store(false)
+	t.Cleanup(func() { AllowLoopbackDial.Store(prev) })
 
 	ctx := testCtx(t, 2*time.Second)
 
@@ -32,9 +32,9 @@ func TestDialContextSafeBlocksPrivate(t *testing.T) {
 func TestDialContextAllowPrivateAcceptsLoopback(t *testing.T) {
 	// Even with AllowLoopbackDial=false, the allow-private dialer must
 	// not filter loopback — proxies on 127.0.0.1 rely on this.
-	prev := AllowLoopbackDial
-	AllowLoopbackDial = false
-	t.Cleanup(func() { AllowLoopbackDial = prev })
+	prev := AllowLoopbackDial.Load()
+	AllowLoopbackDial.Store(false)
+	t.Cleanup(func() { AllowLoopbackDial.Store(prev) })
 
 	// Connection will fail (nothing listening on :1) but the error must
 	// not be the private-IP reject.
@@ -49,9 +49,9 @@ func TestDialContextAllowPrivateAcceptsLoopback(t *testing.T) {
 }
 
 func TestIpIsBlocked(t *testing.T) {
-	prev := AllowLoopbackDial
-	AllowLoopbackDial = false
-	t.Cleanup(func() { AllowLoopbackDial = prev })
+	prev := AllowLoopbackDial.Load()
+	AllowLoopbackDial.Store(false)
+	t.Cleanup(func() { AllowLoopbackDial.Store(prev) })
 
 	cases := []struct {
 		ip   string
@@ -105,9 +105,9 @@ func TestAllowProxyHost(t *testing.T) {
 // rejecting it as private (the connection fails with "refused", not the
 // SSRF reject).
 func TestAllowProxyHostDialAuto(t *testing.T) {
-	prev := AllowLoopbackDial
-	AllowLoopbackDial = false
-	t.Cleanup(func() { AllowLoopbackDial = prev })
+	prev := AllowLoopbackDial.Load()
+	AllowLoopbackDial.Store(false)
+	t.Cleanup(func() { AllowLoopbackDial.Store(prev) })
 	resetProxyHosts()
 
 	allowProxyHost("127.0.0.1")

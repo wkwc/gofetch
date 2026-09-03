@@ -10,14 +10,16 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 // AllowLoopbackDial permits dials to loopback addresses when true.
 // Production stays false; unit tests set it so httptest can bind 127.0.0.1.
-// Never enable this for the CLI entrypoint.
-var AllowLoopbackDial bool
+// Never enable this for the CLI entrypoint. Atomic: read concurrently by
+// dial goroutines, written once at startup.
+var AllowLoopbackDial atomic.Bool
 
 // HostIsPrivateContext reports whether hostname resolves to a private,
 // loopback, link-local, multicast, or unspecified IP. DNS failure → true
@@ -45,7 +47,7 @@ func ipIsBlocked(ip net.IP) bool {
 		ip = ip4
 	}
 	if ip.IsLoopback() {
-		return !AllowLoopbackDial
+		return !AllowLoopbackDial.Load()
 	}
 	return ip.IsPrivate() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||

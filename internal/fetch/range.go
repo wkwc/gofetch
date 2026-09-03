@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -127,6 +128,16 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 		if !fully && queue.Len() == 0 {
 			fully = true
 		}
+		// A real worker error (a non-cancellation failure such as a
+		// Content-Range mismatch) means the download failed even if the
+		// queue drained. The cancellation signal itself is not a failure.
+		for _, ws := range states {
+			if err, ok := ws.err(); ok && err != nil &&
+				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				fully = false
+				break
+			}
+		}
 		if fully {
 			// Serial drain of any leftover (probe lied about ranges etc).
 			for {
@@ -175,15 +186,18 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 			}
 			return ctx.Err()
 		case fully := <-done:
+			// A worker may have set ctx.Canceled from its top-of-loop check
+			// right after finishing the last task; when the file is fully
+			// written that's a success, not a failure.
+			if fully {
+				return nil
+			}
 			for _, ws := range states {
 				if err, ok := ws.err(); ok && err != nil {
 					return err
 				}
 			}
-			if !fully {
-				return ctx.Err()
-			}
-			return nil
+			return ctx.Err()
 		case <-saveC:
 			d.maybeSaveResume(false, url, states)
 		case <-resumeC:
