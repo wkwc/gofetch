@@ -165,7 +165,11 @@ func TestAllocateFileWriterWithMmap(t *testing.T) {
 	}
 }
 
-func TestMmapWriterTruncate(t *testing.T) {
+// TestMmapWriterTruncateUnsupported pins that mmap writers refuse
+// truncation: production never truncates an mmap writer (single-stream
+// truncation uses a raw writer), so the dead remap path was replaced with
+// a loud error.
+func TestMmapWriterTruncateUnsupported(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.bin")
 
@@ -175,25 +179,12 @@ func TestMmapWriterTruncate(t *testing.T) {
 	}
 	defer func() { _ = mw.Close() }()
 
-	if _, err := mw.WriteAt([]byte("hello"), 0); err != nil {
-		t.Fatal(err)
+	if err := mw.Truncate(4096); err == nil {
+		t.Fatal("expected mmap truncation to be rejected")
 	}
-	if err := mw.Truncate(4096); err != nil {
-		t.Fatalf("Truncate(4096): %v", err)
-	}
-	if mw.size != 4096 {
-		t.Errorf("size = %d, want 4096", mw.size)
-	}
-	if len(mw.data) != 4096 {
-		t.Errorf("data len = %d, want 4096", len(mw.data))
-	}
-	// Writes within the new bounds must still work.
-	if _, err := mw.WriteAt([]byte("x"), 4095); err != nil {
-		t.Errorf("WriteAt at new end: %v", err)
-	}
-	// Growing beyond the mapped size must be rejected.
-	if err := mw.Truncate(16384); err == nil {
-		t.Error("expected error growing beyond original size")
+	// Writes still work after the refusal.
+	if _, err := mw.WriteAt([]byte("x"), 0); err != nil {
+		t.Errorf("WriteAt after refused truncate: %v", err)
 	}
 }
 

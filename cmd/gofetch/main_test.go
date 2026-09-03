@@ -824,3 +824,22 @@ func TestSidecarURLPreservesQuery(t *testing.T) {
 		t.Errorf("plain sidecar = %s", got)
 	}
 }
+
+func TestRunCACertValidation(t *testing.T) {
+	// A bad --ca-cert path must be a clear startup error, not silently
+	// ignored (which would fall back to the system pool and surface later
+	// as a confusing TLS failure).
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "nope.pem")
+	if code := run([]string{"--ca-cert", bad, "--info", "https://example.com"}); code != 1 {
+		t.Errorf("run(--ca-cert missing) = %d, want 1", code)
+	}
+	// A file with no certs is also rejected.
+	notCert := filepath.Join(dir, "empty.pem")
+	if err := os.WriteFile(notCert, []byte("not a cert\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"--ca-cert", notCert, "--info", "https://example.com"}); code != 1 {
+		t.Errorf("run(--ca-cert no certs) = %d, want 1", code)
+	}
+}

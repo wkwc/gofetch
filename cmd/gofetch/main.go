@@ -140,6 +140,12 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "gofetch: --json requires --info")
 		return 1
 	}
+	if *caCert != "" {
+		if err := fetch.ValidateCACert(*caCert); err != nil {
+			fmt.Fprintf(os.Stderr, "gofetch: --ca-cert: %v\n", err)
+			return 1
+		}
+	}
 	bufBytes := int64(0)
 	if *bufSize != "" {
 		var err error

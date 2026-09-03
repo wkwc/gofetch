@@ -142,8 +142,24 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	return d
 }
 
+// ValidateCACert verifies that path is a readable PEM file containing at
+// least one certificate. The CLI calls this before downloading so a bad
+// --ca-cert is a clear startup error, not a silent fallback to the system
+// pool (which would surface later as a confusing TLS failure).
+func ValidateCACert(path string) error {
+	pemData, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pemData) {
+		return fmt.Errorf("no certificates found in %s", path)
+	}
+	return nil
+}
+
 // loadRootCAs returns a root pool that trusts the PEM file at path in
-// addition to the system pool, or nil when path is empty or unreadable.
+// addition to the system pool, or nil when path is empty.
 func loadRootCAs(path string) *x509.CertPool {
 	if path == "" {
 		return nil
@@ -156,9 +172,7 @@ func loadRootCAs(path string) *x509.CertPool {
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}
-	if !pool.AppendCertsFromPEM(pemData) {
-		return nil
-	}
+	_ = pool.AppendCertsFromPEM(pemData)
 	return pool
 }
 

@@ -139,31 +139,12 @@ func (m *mmapWriter) Close() error {
 	return closeErr
 }
 
-// Truncate truncates the mmap'd file to size.
+// Truncate is unsupported for mmap writers: they are only created for a
+// known size and production never truncates one (single-stream truncation
+// runs on a raw pwrite writer). Fail loudly rather than carry dead remap
+// logic; the fileWriter interface requires the method.
 func (m *mmapWriter) Truncate(size int64) error {
-	if size < 0 || size > m.size {
-		return fmt.Errorf("mmap truncate: invalid size %d (max %d)", size, m.size)
-	}
-	if err := m.fd.Truncate(size); err != nil {
-		return err
-	}
-	if size < m.size {
-		// Remap to smaller size. Nil out m.data immediately after
-		// munmap so a concurrent reader can't observe a dangling
-		// pointer if the subsequent mmapSys fails (use-after-free).
-		unmapErr := munmapSys(m.data)
-		m.data = nil
-		if unmapErr != nil {
-			return unmapErr
-		}
-		m.size = size
-		data, err := mmapSys(m.fd.Fd(), int(size))
-		if err != nil {
-			return err
-		}
-		m.data = data
-	}
-	return nil
+	return fmt.Errorf("mmap writer cannot be truncated (raw pwrite writer required)")
 }
 
 // allocateFileWriter returns the fastest fileWriter for the given

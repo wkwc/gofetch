@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -181,23 +182,18 @@ func parseContentRange(v string) (start, end, total int64, ok bool) {
 }
 
 // parseUint parses a non-empty base-10 unsigned integer.
+// parseUint parses a non-empty base-10 unsigned integer. Wraps
+// strconv.ParseUint (which already rejects '+', '-', and non-digits),
+// adding a MaxInt64 bound so Content-Range totals can never wrap.
 func parseUint(s string) (int64, error) {
-	if s == "" {
-		return 0, errors.New("empty")
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, err
 	}
-	var n int64
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < '0' || c > '9' {
-			return 0, errors.New("non-digit")
-		}
-		d := int64(c - '0')
-		if n > (math.MaxInt64-d)/10 {
-			return 0, errors.New("overflow")
-		}
-		n = n*10 + d
+	if n > math.MaxInt64 {
+		return 0, errors.New("overflow")
 	}
-	return n, nil
+	return int64(n), nil
 }
 
 // defaultUserAgent is the User-Agent unless overridden via Options.
