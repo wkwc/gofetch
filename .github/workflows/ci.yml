@@ -62,8 +62,8 @@ jobs:
           version: v2.12.2
           args: --timeout=5m
 
-      - name: Unit tests (race, shuffled)
-        run: go test -race -shuffle=on -count=1 ./...
+      - name: Unit tests (race, shuffled, repeat-2)
+        run: go test -race -shuffle=on -count=2 ./...
 
       - name: CLI smoke test (black-box)
         run: ./scripts/smoke.sh
