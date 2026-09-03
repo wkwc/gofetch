@@ -67,6 +67,7 @@ func run(args []string) int {
 		bufSize     = fs.String("buf-size", "", "override auto-tuned read buffer per worker (e.g. 64k, 1M)")
 		maxRetries  = fs.Int("max-retries", 0, "override the per-chunk retry budget (0 = auto, default 10)")
 		noClobber   = fs.Bool("no-clobber", false, "skip downloads whose output file already exists")
+		caCert      = fs.String("ca-cert", "", "PEM file of extra root CAs to trust (private/self-signed mirrors)")
 		jsonOut     = fs.Bool("json", false, "with --info, emit JSON (one object per URL)")
 		showVersion = fs.Bool("version", false, "print version and exit")
 		headers     headerList
@@ -233,6 +234,7 @@ func run(args []string) int {
 			Workers:      *workers,
 			BufSize:      int(bufBytes),
 			RetryMax:     *maxRetries,
+			CACert:       *caCert,
 		})
 
 		if err := d.Download(ctx); err != nil {
@@ -384,6 +386,7 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(os.Stderr, "  gofetch --limit-rate 2M -o out.bin https://example.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch -x 16 --buf-size 256k -o out.bin https://example.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch --no-clobber -o out.bin https://example.com/file.bin  # skip if exists")
+	fmt.Fprintln(os.Stderr, "  gofetch --ca-cert ca.pem -o out.bin https://mirror.example.com/f.bin  # private CA")
 	fmt.Fprintln(os.Stderr, "  gofetch -h auto https://example.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch -m mirror1,mirror2 https://primary.com/file.bin")
 	fmt.Fprintln(os.Stderr, "  gofetch --allow-loopback -o out.bin http://127.0.0.1:9120/  # local benchserver")

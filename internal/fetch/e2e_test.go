@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
@@ -696,5 +697,59 @@ func TestChaosServerHardFailClean(t *testing.T) {
 	// The output must not be left looking complete.
 	if got, _ := os.ReadFile(out); bytes.Equal(got, payload) {
 		t.Fatal("output looks complete despite hard failure — must not be trusted")
+	}
+}
+
+// TestHTTPSDownloadWithCACert exercises the never-before-tested TLS +
+// HTTP/2 path: gofetch's transport forces HTTP/2 for ALPN, but every
+// other e2e test runs over plain HTTP/1.1. A self-signed test server
+// becomes trusted via the --ca-cert PEM, and the handler asserts the
+// requests actually arrived over HTTP/2 (ProtoMajor == 2).
+func TestHTTPSDownloadWithCACert(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+	var sawH2 atomic.Bool
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 {
+			sawH2.Store(true)
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	// Trust the self-signed server cert via the --ca-cert mechanism.
+	certPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(certPath, srv.Certificate().Raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Certificate().Raw is DER, not PEM — encode it.
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(certPath, pemBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outFile := filepath.Join(t.TempDir(), "out.bin")
+	d := NewDownloader(srv.URL, outFile, Options{CACert: certPath, Quiet: true, NoResume: true})
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("Download over TLS: %v", err)
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch over TLS: got %d bytes, want %d", len(got), len(payload))
+	}
+	if !sawH2.Load() {
+		t.Error("expected requests to arrive over HTTP/2 (ALPN), got HTTP/1.x")
 	}
 }

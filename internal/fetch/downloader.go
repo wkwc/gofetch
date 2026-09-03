@@ -5,6 +5,7 @@ package fetch
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -81,6 +82,9 @@ type Options struct {
 	// RetryMax overrides the per-chunk retry budget (transient errors and
 	// retryable HTTP statuses, default 10). 0 keeps the default.
 	RetryMax int
+	// CACert is a path to a PEM file of extra root CAs to trust (private
+	// or self-signed dataset mirrors). Empty uses the system pool.
+	CACert string
 }
 
 // NewDownloader constructs a Downloader with auto-configured defaults.
@@ -129,10 +133,30 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	// overall deadline is the caller's context.
 	d.client = &http.Client{
 		Timeout:       0,
-		Transport:     newAutoTransport(ac, opt.Proxy),
+		Transport:     newAutoTransport(ac, opt.Proxy, loadRootCAs(opt.CACert)),
 		CheckRedirect: CheckRedirectSafe,
 	}
 	return d
+}
+
+// loadRootCAs returns a root pool that trusts the PEM file at path in
+// addition to the system pool, or nil when path is empty or unreadable.
+func loadRootCAs(path string) *x509.CertPool {
+	if path == "" {
+		return nil
+	}
+	pemData, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pemData) {
+		return nil
+	}
+	return pool
 }
 
 // smallFileThreshold is the file size below which parallel range downloads

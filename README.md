@@ -46,6 +46,7 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **Buffer** | `--buf-size` | Override the auto-tuned per-worker read buffer (`64k`, `1M`) |
 | **Retries** | `--max-retries` | Override the per-chunk retry budget (0 = auto, default 10) |
 | **No Clobber** | `--no-clobber` | Skip downloads whose output file is already complete (a partial download with a resume sidecar is resumed, not skipped) |
+| **CA cert** | `--ca-cert PATH` | Trust extra root CAs from a PEM file (private / self-signed dataset mirrors) |
 | **Proxy** | `--proxy URL` | HTTP(S)/SOCKS5 proxy; overrides the environment |
 | **Manifest** | `-manifest-out PATH` | After download, write a per-chunk integrity manifest to PATH |
 | **Local bench** | `--allow-loopback` | Permit loopback/private dials (for the bundled benchserver / tests; unsafe for untrusted URLs) |
@@ -106,6 +107,9 @@ gofetch -x 16 --buf-size 256k -o out.bin https://example.com/large.bin
 
 # Skip if the output already exists
 gofetch --no-clobber -o out.bin https://example.com/file.bin
+
+# Trust a private/self-signed dataset mirror's CA
+gofetch --ca-cert /etc/ssl/certs/my-mirror-ca.pem -o out.bin https://mirror.example.edu/file.bin
 
 # Generate a per-chunk integrity manifest after download (chunk-level verification for future runs)
 gofetch -manifest-out out.gofetch.manifest -o out.bin https://example.com/file.bin

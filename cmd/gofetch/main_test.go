@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -665,5 +666,42 @@ func TestRunNoClobberResumesPartial(t *testing.T) {
 	}
 	if string(got) != string(payload) {
 		t.Errorf("content = %q, want %q", got, payload)
+	}
+}
+
+func TestRunCACert(t *testing.T) {
+	// A self-signed HTTPS dataset mirror becomes reachable via --ca-cert.
+	payload := bytes.Repeat([]byte("private-mirror-"), 64*1024)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	certPath := filepath.Join(t.TempDir(), "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(certPath, pemBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "s.bin")
+	code := run([]string{"--allow-loopback", "-q", "--ca-cert", certPath, "-o", out, srv.URL})
+	if code != 0 {
+		t.Fatalf("run(--ca-cert) = %d, want 0", code)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+
+	// Without the CA, the same URL must fail (cert not trusted).
+	badOut := filepath.Join(t.TempDir(), "bad.bin")
+	if code := run([]string{"--allow-loopback", "-q", "-o", badOut, srv.URL}); code != 1 {
+		t.Errorf("run without --ca-cert = %d, want 1", code)
 	}
 }

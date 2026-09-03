@@ -1,6 +1,8 @@
 package fetch
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -112,13 +114,14 @@ func (ac *AutoConfig) Retune(totalSize int64) {
 // newAutoTransport builds an http.Transport with TCP keepalive,
 // proxy detection from environment (or an explicit override), and
 // optimized socket options (TCP_NODELAY, TCP_FASTOPEN, TCP_NOTSENT_LOWAT,
-// faster keepalive).
+// faster keepalive). rootCAs, when non-nil, replaces the default system
+// pool (used for --ca-cert private/self-signed mirrors).
 //
 // DialContextAuto pins each target dial to a non-private resolved IP
 // (DNS-rebinding resistant). Proxy hosts from HTTP(S)_PROXY/ALL_PROXY or
 // an explicit --proxy are trusted operator config and may be private
 // (e.g. 127.0.0.1).
-func newAutoTransport(ac AutoConfig, proxyURL string) *http.Transport {
+func newAutoTransport(ac AutoConfig, proxyURL string, rootCAs *x509.CertPool) *http.Transport {
 	proxy := http.ProxyFromEnvironment
 	if proxyURL != "" {
 		if u, err := url.Parse(proxyURL); err == nil {
@@ -141,6 +144,9 @@ func newAutoTransport(ac AutoConfig, proxyURL string) *http.Transport {
 		ResponseHeaderTimeout: ac.Timeout,
 		ReadBufferSize:        ac.BufSize,
 		WriteBufferSize:       ac.BufSize,
+	}
+	if rootCAs != nil {
+		tr.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
 	}
 	return tr
 }

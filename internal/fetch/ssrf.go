@@ -202,7 +202,7 @@ func NewSafeClient(timeout time.Duration) *http.Client {
 	ac := AutoConfigure(0)
 	return &http.Client{
 		Timeout:       timeout,
-		Transport:     newAutoTransport(ac, ""),
+		Transport:     newAutoTransport(ac, "", nil),
 		CheckRedirect: CheckRedirectSafe,
 	}
 }

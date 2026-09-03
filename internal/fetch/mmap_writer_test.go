@@ -220,3 +220,30 @@ func TestRawFileWriterReadAt(t *testing.T) {
 		t.Errorf("ReadAt = %q, want %q", buf, "23456")
 	}
 }
+
+func TestAllocateFileWriterRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.bin")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	if _, err := allocateFileWriter(link, 1024, false); err == nil {
+		t.Fatal("expected symlink output to be rejected")
+	}
+	// Target must be untouched.
+	if got, _ := os.ReadFile(target); string(got) != "x" {
+		t.Errorf("symlink target modified: %q", got)
+	}
+	// Existing regular file is fine (overwrite).
+	regular := filepath.Join(dir, "regular.bin")
+	if err := os.WriteFile(regular, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allocateFileWriter(regular, 1024, false); err != nil {
+		t.Errorf("regular file rejected: %v", err)
+	}
+}

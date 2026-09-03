@@ -117,6 +117,14 @@ if [ "$LOCAL" = 1 ]; then
   runl 0 -- -q --no-clobber -o "$TMP/c.bin" "$URL"
 fi
 
+echo "== symlink output rejected =="
+if [ "$LOCAL" = 1 ]; then
+  touch "$TMP/target.bin"
+  ln -s "$TMP/target.bin" "$TMP/link.bin"
+  runl 1 -- -q -o "$TMP/link.bin" "$URL"
+  [ ! -s "$TMP/target.bin" ] && ok "symlink target untouched" || bad "symlink target modified"
+fi
+
 echo "== rate limit (sanity: completes) =="
 runl 0 -- -q --limit-rate 10M -o "$TMP/rl.bin" "$URL"
 
