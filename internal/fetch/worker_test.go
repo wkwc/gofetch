@@ -281,7 +281,7 @@ func TestStealPlanZeroProgress(t *testing.T) {
 func TestReadBodyMidRangeEOFIsTransient(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mid.bin")
-	fw, err := allocateFileWriter(path, 4096, false)
+	fw, err := allocateFileWriter(path, 4096, false, false)
 	if err != nil {
 		t.Fatalf("allocateFileWriter: %v", err)
 	}

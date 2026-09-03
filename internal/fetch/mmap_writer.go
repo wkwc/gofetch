@@ -173,13 +173,16 @@ func (m *mmapWriter) Truncate(size int64) error {
 // When resume is true and the file already exists with the right size,
 // we keep it open RDWR for mmap (no truncation). Otherwise we create
 // or truncate to size and mmap the freshly-sized region.
-func allocateFileWriter(path string, size int64, resume bool) (fileWriter, error) {
+func allocateFileWriter(path string, size int64, resume bool, noMmap bool) (fileWriter, error) {
 	// Refuse to write the output through a symlink: with attacker- or
 	// operator-supplied URLs, a pre-placed symlink at the output path
 	// could redirect writes into an arbitrary file. Same guard clearResume
 	// applies to sidecars. Intermediate directories are not checked.
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("refusing to write output through symlink %q", path)
+	}
+	if noMmap {
+		return allocateRawFile(path, size, resume)
 	}
 	if size <= 0 {
 		return allocateRawFile(path, size, resume)

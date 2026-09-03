@@ -137,7 +137,7 @@ func TestAllocateFileWriterSmallFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tiny.bin")
 
-	fw, err := allocateFileWriter(path, 0, false)
+	fw, err := allocateFileWriter(path, 0, false, false)
 	if err != nil {
 		t.Fatalf("allocateFileWriter: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestAllocateFileWriterWithMmap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.bin")
 
-	fw, err := allocateFileWriter(path, 4096, false)
+	fw, err := allocateFileWriter(path, 4096, false, false)
 	if err != nil {
 		t.Fatalf("allocateFileWriter: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestAllocateFileWriterRejectsSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
-	if _, err := allocateFileWriter(link, 1024, false); err == nil {
+	if _, err := allocateFileWriter(link, 1024, false, false); err == nil {
 		t.Fatal("expected symlink output to be rejected")
 	}
 	// Target must be untouched.
@@ -243,7 +243,7 @@ func TestAllocateFileWriterRejectsSymlink(t *testing.T) {
 	if err := os.WriteFile(regular, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := allocateFileWriter(regular, 1024, false); err != nil {
+	if _, err := allocateFileWriter(regular, 1024, false, false); err != nil {
 		t.Errorf("regular file rejected: %v", err)
 	}
 }

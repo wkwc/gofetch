@@ -11,7 +11,7 @@ func TestAllocateFileWriter(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.bin")
 
-	fw, err := allocateFileWriter(path, 1024*1024, false)
+	fw, err := allocateFileWriter(path, 1024*1024, false, false)
 	if err != nil {
 		t.Fatalf("allocateFileWriter: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestAllocateFileWriter(t *testing.T) {
 func TestAllocateFileWriterResumeFreshUsesMmap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fresh.bin")
-	fw, err := allocateFileWriter(path, 1024*1024, true)
+	fw, err := allocateFileWriter(path, 1024*1024, true, false)
 	if err != nil {
 		t.Fatalf("allocateFileWriter resume fresh: %v", err)
 	}

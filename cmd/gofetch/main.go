@@ -67,6 +67,7 @@ func run(args []string) int {
 		bufSize     = fs.String("buf-size", "", "override auto-tuned read buffer per worker (e.g. 64k, 1M)")
 		maxRetries  = fs.Int("max-retries", 0, "override the per-chunk retry budget (0 = auto, default 10)")
 		noClobber   = fs.Bool("no-clobber", false, "skip downloads whose output file already exists")
+		noMmap      = fs.Bool("no-mmap", false, "use raw pwrite instead of mmap (filesystems where mmap misbehaves)")
 		caCert      = fs.String("ca-cert", "", "PEM file of extra root CAs to trust (private/self-signed mirrors)")
 		jsonOut     = fs.Bool("json", false, "with --info, emit JSON (one object per URL)")
 		showVersion = fs.Bool("version", false, "print version and exit")
@@ -235,6 +236,7 @@ func run(args []string) int {
 			BufSize:      int(bufBytes),
 			RetryMax:     *maxRetries,
 			CACert:       *caCert,
+			NoMmap:       *noMmap,
 		})
 
 		if err := d.Download(ctx); err != nil {

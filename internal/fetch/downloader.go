@@ -42,6 +42,7 @@ type Downloader struct {
 	// autoConfig.Workers / autoConfig.BufSize.
 	workersSet bool
 	bufSet     bool
+	noMmap     bool
 
 	lastResumeSaveMu sync.Mutex
 	lastResumeSave   time.Time
@@ -84,6 +85,10 @@ type Options struct {
 	// CACert is a path to a PEM file of extra root CAs to trust (private
 	// or self-signed dataset mirrors). Empty uses the system pool.
 	CACert string
+	// NoMmap forces the raw pwrite writer instead of mmap. Use on
+	// filesystems where mmap is problematic (NFS, FUSE, overcommit
+	// limits) or for comparison/benchmarking.
+	NoMmap bool
 }
 
 // NewDownloader constructs a Downloader with auto-configured defaults.
@@ -118,6 +123,7 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		rateLimit:     newRateLimiter(opt.RateLimit),
 		workersSet:    opt.Workers > 0,
 		bufSet:        opt.BufSize > 0,
+		noMmap:        opt.NoMmap,
 	}
 	// Only set resumePath when resume is enabled so saves/tickers
 	// and sidecar cleanup stay fully disabled under --no-resume.
@@ -224,7 +230,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 		// or in-memory progress carried over from a failed mirror.
 		completed := d.resolveResume(activeURL, info.total)
 
-		f, err := allocateFileWriter(d.outFile, info.total, d.resumeEnabled)
+		f, err := allocateFileWriter(d.outFile, info.total, d.resumeEnabled, d.noMmap)
 		if err != nil {
 			lastErr = fmt.Errorf("mirror %d (%s) file setup: %w", i+1, activeURL, err)
 			continue
