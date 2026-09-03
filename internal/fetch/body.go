@@ -43,11 +43,11 @@ func (d *Downloader) pumpBody(ctx context.Context, body io.Reader, f fileWriter,
 		return 0, fmt.Errorf("mmap slice short: end=%d len=%d", end, len(direct))
 	}
 	manifest := d.manifest
-	bufCap := int64(d.bufSize)
+	bufCap := int64(d.autoConfig.BufSize)
 	cursor := start
 	var buf []byte
 	if direct == nil {
-		buf = acquireBuf(d.bufSize)
+		buf = acquireBuf(d.autoConfig.BufSize)
 		defer releaseBuf(buf)
 	}
 	for {

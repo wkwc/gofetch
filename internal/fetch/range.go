@@ -36,7 +36,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 		return d.singleDownload(ctx, url, total, completed, f)
 	}
 
-	states := make([]*workerState, d.workerCount)
+	states := make([]*workerState, d.autoConfig.Workers)
 	for i := range states {
 		states[i] = newWorkerState()
 	}
@@ -66,11 +66,11 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 	queue.PushMany(seeds)
 
 	var workers sync.WaitGroup
-	workers.Add(d.workerCount)
+	workers.Add(d.autoConfig.Workers)
 
 	var saveC chan struct{}
 	if d.resumePath != "" {
-		saveC = make(chan struct{}, d.workerCount)
+		saveC = make(chan struct{}, d.autoConfig.Workers)
 	}
 	for _, ws := range states {
 		go func(ws *workerState) {

@@ -287,7 +287,7 @@ func TestReadBodyMidRangeEOFIsTransient(t *testing.T) {
 	}
 	defer func() { _ = fw.Close() }()
 
-	d := &Downloader{bufSize: 4096}
+	d := &Downloader{autoConfig: AutoConfig{BufSize: 4096}}
 	// Task wants bytes 0-1023, but the body only has 100 bytes then EOF.
 	task := Task{Start: 0, End: 1023}
 	ws := newWorkerState()

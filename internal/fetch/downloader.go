@@ -20,8 +20,6 @@ type Downloader struct {
 	url           string
 	mirrors       []string
 	outFile       string
-	workerCount   int
-	bufSize       int
 	resumeEnabled bool
 	quiet         bool
 	verbose       bool
@@ -39,8 +37,9 @@ type Downloader struct {
 	userAgent string
 	rateLimit *rateLimiter
 
-	// workersSet/bufSet track explicit overrides so applyProbe's Retune
-	// leaves user-provided values alone.
+	// workersSet/bufSet track explicit overrides so Retune leaves
+	// user-provided values alone. The effective values always live in
+	// autoConfig.Workers / autoConfig.BufSize.
 	workersSet bool
 	bufSet     bool
 
@@ -108,10 +107,6 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		url:           rawURL,
 		mirrors:       opt.Mirrors,
 		outFile:       outPath,
-		workerCount:   ac.Workers,
-		bufSize:       ac.BufSize,
-		workersSet:    opt.Workers > 0,
-		bufSet:        opt.BufSize > 0,
 		resumeEnabled: !opt.NoResume,
 		quiet:         opt.Quiet,
 		verbose:       opt.Verbose,
@@ -121,6 +116,8 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 		headers:       opt.Headers,
 		userAgent:     ua,
 		rateLimit:     newRateLimiter(opt.RateLimit),
+		workersSet:    opt.Workers > 0,
+		bufSet:        opt.BufSize > 0,
 	}
 	// Only set resumePath when resume is enabled so saves/tickers
 	// and sidecar cleanup stay fully disabled under --no-resume.
@@ -187,8 +184,8 @@ func ProbeURL(ctx context.Context, rawURL string) (ProbeInfo, error) {
 		URL:            rawURL,
 		Total:          info.total,
 		SupportsRanges: info.supportsRanges,
-		Workers:        d.workerCount,
-		BufSize:        d.bufSize,
+		Workers:        d.autoConfig.Workers,
+		BufSize:        d.autoConfig.BufSize,
 	}, nil
 }
 
@@ -288,13 +285,7 @@ func (d *Downloader) applyProbe(info probeInfo) {
 	}
 
 	d.totalSize = info.total
-	d.autoConfig.Retune(info.total)
-	if !d.workersSet {
-		d.workerCount = d.autoConfig.Workers
-	}
-	if !d.bufSet {
-		d.bufSize = d.autoConfig.BufSize
-	}
+	d.autoConfig.Retune(info.total, d.workersSet, d.bufSet)
 	d.vlog("ranges=%v total=%s", info.supportsRanges, HumanBytes(info.total))
 }
 

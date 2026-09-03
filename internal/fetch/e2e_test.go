@@ -472,18 +472,18 @@ func TestWorkersBufOverride(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "out.bin")
 
 	d := NewDownloader(srv.URL, outFile, Options{Workers: 2, BufSize: 32 * 1024})
-	if d.workerCount != 2 {
-		t.Errorf("workerCount = %d, want 2", d.workerCount)
+	if d.autoConfig.Workers != 2 {
+		t.Errorf("workers = %d, want 2", d.autoConfig.Workers)
 	}
-	if d.bufSize != 32*1024 {
-		t.Errorf("bufSize = %d, want 32768", d.bufSize)
+	if d.autoConfig.BufSize != 32*1024 {
+		t.Errorf("bufSize = %d, want 32768", d.autoConfig.BufSize)
 	}
 	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
-	// applyProbe must not clobber the overrides.
-	if d.workerCount != 2 || d.bufSize != 32*1024 {
-		t.Errorf("overrides clobbered by Retune: workers=%d buf=%d", d.workerCount, d.bufSize)
+	// applyProbe/Retune must not clobber the overrides.
+	if d.autoConfig.Workers != 2 || d.autoConfig.BufSize != 32*1024 {
+		t.Errorf("overrides clobbered by Retune: workers=%d buf=%d", d.autoConfig.Workers, d.autoConfig.BufSize)
 	}
 	got, err := os.ReadFile(outFile)
 	if err != nil {

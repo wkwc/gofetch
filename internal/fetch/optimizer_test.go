@@ -44,14 +44,32 @@ func TestAutoConfigTimeout(t *testing.T) {
 
 func TestAutoConfigRetune(t *testing.T) {
 	ac := AutoConfigure(0)
-	t.Logf("initial workers = %d", ac.Workers)
-	ac.Retune(200 << 20) // 200 MB
+	ac.Retune(200<<20, false, false) // 200 MB
 	if ac.BufSize != 256*1024 {
 		t.Errorf("Retune(200MB) bufSize = %d, want 256KB", ac.BufSize)
 	}
-	ac.Retune(100) // tiny file
+	ac.Retune(100, false, false) // tiny file
 	if ac.BufSize != 32*1024 {
 		t.Errorf("Retune(100B) bufSize = %d, want 32KB", ac.BufSize)
+	}
+
+	// Overridden values are preserved by Retune.
+	ac2 := AutoConfigure(0)
+	ac2.Workers = 4
+	ac2.BufSize = 64 << 10
+	ac2.Retune(200<<20, true, true)
+	if ac2.Workers != 4 || ac2.BufSize != 64<<10 {
+		t.Errorf("Retune clobbered overrides: workers=%d buf=%d, want 4/64KB", ac2.Workers, ac2.BufSize)
+	}
+	// Partially overridden: only the free field is retuned.
+	ac3 := AutoConfigure(0)
+	ac3.BufSize = 32 << 10
+	ac3.Retune(200<<20, false, true)
+	if ac3.BufSize != 32<<10 {
+		t.Errorf("buf override clobbered: %d, want 32KB", ac3.BufSize)
+	}
+	if ac3.Workers == 0 {
+		t.Error("workers should still be retuned when not overridden")
 	}
 }
 

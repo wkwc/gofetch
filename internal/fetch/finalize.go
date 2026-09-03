@@ -120,7 +120,7 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", HumanBytes(done))
 	fmt.Fprintf(os.Stderr, "  time:    %s\n", formatDuration(elapsed))
 	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", HumanBytes(int64(speed)))
-	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.workerCount)
+	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.autoConfig.Workers)
 
 	return nil
 }

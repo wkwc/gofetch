@@ -95,13 +95,18 @@ func (ac *AutoConfig) Backoff(n int) time.Duration {
 	return d + time.Duration(rand.N(int64(d/4)+1))
 }
 
-// Retune re-derives Workers and BufSize from the true total once known.
-func (ac *AutoConfig) Retune(totalSize int64) {
+// Retune re-derives Workers and BufSize from the true total once known,
+// leaving user-overridden values untouched (workersSet/bufSet).
+func (ac *AutoConfig) Retune(totalSize int64, workersSet, bufSet bool) {
 	if totalSize <= 0 {
 		return
 	}
-	ac.BufSize = scaleBufSize(totalSize)
-	ac.Workers = scaleWorkers(totalSize, runtime.NumCPU())
+	if !bufSet {
+		ac.BufSize = scaleBufSize(totalSize)
+	}
+	if !workersSet {
+		ac.Workers = scaleWorkers(totalSize, runtime.NumCPU())
+	}
 }
 
 // TCP_NOTSENT_LOWAT (0x19) is not exported by the linux syscall
