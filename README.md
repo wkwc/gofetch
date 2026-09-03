@@ -272,7 +272,10 @@ gofetch/
   scripts/
     bench.sh                 # Consolidated benchmark suite (quick|full|compare|all)
     bench_lib.sh             # Shared bench helpers (build, server lifecycle)
+    bench_real.sh            # Real-internet throughput vs aria2c/wget2/curl
     fuzz.sh                  # Fuzz all targets
+    smoke.sh                 # Black-box CLI smoke test (CI)
+    realworld.sh             # Real-network functional battery
     install.sh               # Release installer (checksum-verified)
 ```
 
@@ -325,6 +328,8 @@ partial file. Runs in CI on every push.
 BENCH=1 ./scripts/realworld.sh  # + gofetch vs aria2c benchmark on real internet
 ```
 
+Real-internet throughput comparisons live in `./scripts/bench_real.sh`.
+
 Network-dependent (run manually or on-demand), so it never gates CI. Proves
 against real servers: byte-equality on `proof.ovh.net` (the README's canonical
 download), `--info` range/size detection, multi-hop 302 redirects via
@@ -332,17 +337,41 @@ download), `--info` range/size detection, multi-hop 302 redirects via
 rate limiting, and (network permitting) interrupt/resume of a 100 MB file.
 Flaky upstreams degrade to a reported skip, never a false failure.
 
-Measurements on a Linux 16-core test box (loopback, fresh server per
-run, 64 MB):
+## Benchmark
+
+### Loopback (synthetic)
+
+On a Linux 16-core box, loopback, 64 MB:
 
 | Tool | Median (3 runs) |
 | ---- | --------------- |
 | `gofetch -q` | ~105 ms |
 | aria2c (`-x 16`) | ~480 ms |
-| aria2c (default 5 conns) | ~550 ms |
+| aria2c (default) | ~550 ms |
 
-`gofetch` is ~4-5× faster than aria2c on this benchmark. The advantage
-comes from:
+### Real internet (1.5 GB Arch Linux ISO, ~42 ms RTT)
+
+Same file, identical 12 s window per tool, measured on a live mirror
+(`./scripts/bench_real.sh`):
+
+| Tool | Throughput |
+| ---- | ---------- |
+| `gofetch` (auto) | ~109 MB/s |
+| aria2c (`-x 16 -s 16`) | ~119 MB/s |
+| aria2c (default) | ~9 MB/s |
+| `curl` (single stream) | ~8 MB/s |
+| `wget2` (HTTP/2 chunked) | ~4 MB/s |
+
+The honest summary: **gofetch matches aria2c's tuned `-x 16` — both saturate
+the server's aggregate link — and crushes single-stream tools by ~13×** on a
+high-latency real connection. aria2c's *default* is a single connection
+(`-x 16` must be passed explicitly), which is why the stock comparison favors
+gofetch so strongly. gofetch also wins on robustness: it needs **zero tuning
+flags** to hit peak speed, uses sparse files (works where aria2c's
+`fallocate` preallocation fails under disk quotas), and auto-verifies with
+`-h auto`.
+
+The loopback advantage comes from:
 
 1. **Zero-copy writes.** Each HTTP read is performed directly into an `mmap(2)`'d slice of the output file. No intermediate buffer + memcpy.
 2. **Lock-free progress.** No global CAS contention — the progress display sums per-worker `bytesDone` counters on demand.
