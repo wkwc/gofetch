@@ -249,7 +249,8 @@ gofetch/
   cmd/benchserver/           # Synthetic HTTP server for benchmarking
   internal/fetch/
     downloader.go            # Core Downloader type and constructor
-    worker.go                # Worker goroutine, HTTP range requests, buffer pool
+    worker.go                # Worker goroutine, HTTP range requests, retry loop
+    body.go                  # Body pumping, per-range reads, pooled buffers
     monitor.go               # Work-stealing monitor
     range.go                 # Parallel range-download orchestration
     single.go                # Single-stream fallback (no range support)
@@ -259,16 +260,17 @@ gofetch/
     progress.go              # Progress tracking, byte formatting, verbose log
     finalize.go              # Sync/close, integrity verify, download summary
     resume.go                # Resume state: persistence, accumulator, sidecar cleanup
-    hash.go                  # SHA-256/512 computation and verification
+    hash.go                  # SHA-256/512/MD5/SHA-1 computation and verification
     sidecar.go               # Sidecar hash parsing (shared with CLI)
     manifest.go              # Per-chunk integrity manifest (O(1) lookup, generator)
     optimizer.go             # Auto-config + transport factory
+    ratelimit.go             # Aggregate bandwidth limiter (--limit-rate)
     ssrf.go                  # SSRF hardening, safe dial/redirect policy
     idle_body.go             # Idle-timeout body wrapper
-    mmap_*.go                # mmap-backed zero-copy writer + platform stubs
+    mmap_*.go                # mmap-backed writer + platform stubs (pwrite is the default with --no-mmap)
     sockopts_*.go            # Linux TCP tuning + platform stubs
     fuzz_test.go             # Fuzz targets for parsers and range algebra
-    *_test.go                # Unit, property, and end-to-end tests
+    *_test.go                # Unit, property, differential, chaos, and e2e tests
   scripts/
     bench.sh                 # Consolidated benchmark suite (quick|full|compare|all)
     bench_lib.sh             # Shared bench helpers (build, server lifecycle)
