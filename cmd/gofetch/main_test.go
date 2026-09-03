@@ -631,3 +631,39 @@ func TestRunHashAutoRemoteMD5(t *testing.T) {
 		t.Errorf("run(-h auto, wrong remote md5) = %d, want 1", code)
 	}
 }
+
+func TestRunNoClobberResumesPartial(t *testing.T) {
+	// A partial download (resume sidecar present) must NOT be skipped by
+	// --no-clobber — it proceeds so the download can resume.
+	payload := []byte("resume me")
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "p.bin")
+	if err := os.WriteFile(out, []byte("partial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out+".gofetch.resume", []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := run([]string{"--allow-loopback", "-q", "--no-clobber", "-o", out, srv.URL}); code != 0 {
+		t.Fatalf("run = %d, want 0", code)
+	}
+	if hits.Load() == 0 {
+		t.Error("--no-clobber skipped a partial download instead of resuming")
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("content = %q, want %q", got, payload)
+	}
+}

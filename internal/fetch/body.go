@@ -15,7 +15,7 @@ func (d *Downloader) readBody(ctx context.Context, task Task, f fileWriter, ws *
 	// instead of hanging forever (steal only fires after bytesDone ≥ 1).
 	idle := newIdleBody(ctx, body, defaultBodyIdle)
 	defer drainAndClose(idle)
-	_, err := d.pumpBody(idle, f, ws, task.Start, task.End, true)
+	_, err := d.pumpBody(ctx, idle, f, ws, task.Start, task.End, true)
 	return err
 }
 
@@ -37,7 +37,7 @@ func mmapBytes(f fileWriter) []byte {
 //
 // Zero-copy fast path: when the writer exposes an mmap slice, reads go
 // straight into it and no pooled buffer is acquired.
-func (d *Downloader) pumpBody(body io.Reader, f fileWriter, ws *workerState, start, end int64, strict bool) (int64, error) {
+func (d *Downloader) pumpBody(ctx context.Context, body io.Reader, f fileWriter, ws *workerState, start, end int64, strict bool) (int64, error) {
 	direct := mmapBytes(f)
 	if end >= 0 && direct != nil && end+1 > int64(len(direct)) {
 		return 0, fmt.Errorf("mmap slice short: end=%d len=%d", end, len(direct))
@@ -78,7 +78,7 @@ func (d *Downloader) pumpBody(body io.Reader, f fileWriter, ws *workerState, sta
 		}
 		n, rerr := body.Read(dest)
 		if n > 0 {
-			d.rateLimit.wait(n)
+			d.rateLimit.wait(ctx, n)
 			if direct == nil && end >= 0 {
 				if remaining := end - cursor + 1; int64(n) > remaining {
 					n = int(remaining)

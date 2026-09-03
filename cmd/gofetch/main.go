@@ -16,6 +16,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	fssys "io/fs"
 	"net/url"
 	"os"
 	"os/signal"
@@ -202,9 +203,14 @@ func run(args []string) int {
 	for i, rawURL := range rawURLs {
 		out := outs[i]
 		if *noClobber {
+			// Skip only COMPLETE files. A partial download is identified by
+			// a resume sidecar — skipping it would strand the partial bytes
+			// forever; instead proceed and resume.
 			if _, err := os.Stat(out); err == nil {
-				fmt.Fprintf(os.Stderr, "gofetch: %s: already exists, skipping\n", out)
-				continue
+				if _, serr := os.Stat(out + ".gofetch.resume"); errors.Is(serr, fssys.ErrNotExist) {
+					fmt.Fprintf(os.Stderr, "gofetch: %s: already exists, skipping\n", out)
+					continue
+				}
 			}
 		}
 		algo, hashHex, err := resolveHash(ctx, *hashFlag, rawURL, out)

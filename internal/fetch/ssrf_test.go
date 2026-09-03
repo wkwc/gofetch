@@ -75,10 +75,18 @@ func TestIpIsBlocked(t *testing.T) {
 	}
 }
 
+// resetProxyHosts empties the global proxy allowlist so tests that call
+// allowProxyHost do not leak entries into later runs (e.g. -count=N).
+func resetProxyHosts() {
+	proxyHostsOnce.Do(loadEnvProxyHosts)
+	proxyHosts = map[string]struct{}{}
+}
+
 // TestAllowProxyHost verifies an explicit --proxy host (which may be a
 // private local proxy) becomes a trusted intermediary for dialing, so
 // DialContextAuto does not SSRF-block it.
 func TestAllowProxyHost(t *testing.T) {
+	resetProxyHosts()
 	host := "proxy.example.invalid"
 	if envProxyHost(host + ":8080") {
 		t.Fatalf("precondition: %q should not be a known proxy", host)
@@ -100,6 +108,7 @@ func TestAllowProxyHostDialAuto(t *testing.T) {
 	prev := AllowLoopbackDial
 	AllowLoopbackDial = false
 	t.Cleanup(func() { AllowLoopbackDial = prev })
+	resetProxyHosts()
 
 	allowProxyHost("127.0.0.1")
 	ctx := testCtx(t, 500*time.Millisecond)

@@ -55,7 +55,7 @@ func (d *Downloader) singleDownload(ctx context.Context, url string, total int64
 	if total > 0 {
 		end = total - 1
 	}
-	written, err := d.pumpBody(idle, f, nil, 0, end, false)
+	written, err := d.pumpBody(ctx, idle, f, nil, 0, end, false)
 	if err != nil {
 		return err
 	}

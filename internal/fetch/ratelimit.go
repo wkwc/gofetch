@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -29,9 +30,11 @@ func newRateLimiter(rate int64) *rateLimiter {
 //
 // The deficit sleep holds the mutex so concurrent workers serialize
 // their sleeps — otherwise N workers would each throttle to the full
-// cap and the aggregate rate would be N× too fast. `last` is refreshed
-// after the sleep so its duration is never double-counted.
-func (rl *rateLimiter) wait(n int) {
+// cap and the aggregate rate would be N× too fast. It is interruptible
+// via ctx so a cancelled download (Ctrl-C) is not held up by a full
+// deficit sleep at a low rate. `last` is refreshed after the sleep so
+// its duration is never double-counted.
+func (rl *rateLimiter) wait(ctx context.Context, n int) {
 	if rl == nil || n <= 0 {
 		return
 	}
@@ -54,11 +57,16 @@ func (rl *rateLimiter) wait(n int) {
 	sleep := time.Duration(deficit / float64(rl.rate) * float64(time.Second))
 	rl.tokens = 0
 	if sleep > 0 {
-		time.Sleep(sleep)
+		t := time.NewTimer(sleep)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+		case <-t.C:
+		}
 	}
 	// The sleep refilled exactly `deficit` tokens which were consumed
 	// above; reset the base so the next call measures only post-sleep
-	// time.
+	// time (or, on cancellation, so the download can stop promptly).
 	rl.last = time.Now()
 	rl.mu.Unlock()
 }

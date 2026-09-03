@@ -45,7 +45,7 @@ $ gofetch https://proof.ovh.net/files/10Mb.dat
 | **Workers** | `-x N` / `--workers` | Override the auto-tuned worker count (0 = auto) |
 | **Buffer** | `--buf-size` | Override the auto-tuned per-worker read buffer (`64k`, `1M`) |
 | **Retries** | `--max-retries` | Override the per-chunk retry budget (0 = auto, default 10) |
-| **No Clobber** | `--no-clobber` | Skip downloads whose output file already exists |
+| **No Clobber** | `--no-clobber` | Skip downloads whose output file is already complete (a partial download with a resume sidecar is resumed, not skipped) |
 | **Proxy** | `--proxy URL` | HTTP(S)/SOCKS5 proxy; overrides the environment |
 | **Manifest** | `-manifest-out PATH` | After download, write a per-chunk integrity manifest to PATH |
 | **Local bench** | `--allow-loopback` | Permit loopback/private dials (for the bundled benchserver / tests; unsafe for untrusted URLs) |
