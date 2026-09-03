@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -780,5 +781,37 @@ func TestInterruptOnCompleteFileIsSuccess(t *testing.T) {
 		if !complete && err == nil {
 			t.Fatalf("trial %d: byte-incomplete file reported success", i)
 		}
+	}
+}
+
+// TestNoGoroutineLeak downloads repeatedly and asserts the goroutine count
+// stays flat — catching leaks in the per-body idleBody goroutine, the
+// drain-result timers, or the transport's keep-alive machinery that single
+// runs would miss.
+func TestNoGoroutineLeak(t *testing.T) {
+	payload := makePayload(512 * 1024)
+	srv := newRangeServer(t, payload, nil)
+	dl := func() {
+		out := filepath.Join(t.TempDir(), "o.bin")
+		d := NewDownloader(srv.URL, out, Options{Quiet: true, NoResume: true})
+		if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+		d.Close() // release keep-alive connections, as the CLI does
+	}
+	// Warm up pools/transports.
+	for i := 0; i < 5; i++ {
+		dl()
+	}
+	runtime.GC()
+	before := runtime.NumGoroutine()
+	for i := 0; i < 50; i++ {
+		dl()
+	}
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond) // let keep-alive/timers settle
+	after := runtime.NumGoroutine()
+	if after > before+8 {
+		t.Fatalf("goroutine leak: %d -> %d after 50 downloads", before, after)
 	}
 }

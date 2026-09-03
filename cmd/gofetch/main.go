@@ -250,7 +250,9 @@ func run(args []string) int {
 			NoMmap:       *noMmap,
 		})
 
-		if err := d.Download(ctx); err != nil {
+		err = d.Download(ctx)
+		d.Close() // release keep-alive connections regardless of outcome
+		if err != nil {
 			// User-initiated cancel (Ctrl-C / SIGTERM / SIGHUP) is not a
 			// failure of the downloader — the partial progress was already
 			// flushed to the resume sidecar, so say so plainly instead of

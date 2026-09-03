@@ -72,6 +72,34 @@ func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
 	return "", "", nil
 }
 
+// sidecarURLFor appends suffix to the PATH of rawURL, preserving any
+// query/fragment. Appending to the raw string would corrupt signed URLs
+// (S3 presigned, GCS, CDN `?X-Amz-*`, `?download=1`) by gluing the suffix
+// onto the query value.
+func sidecarURLFor(rawURL, suffix string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL + suffix
+	}
+	u.Path += suffix
+	return u.String()
+}
+
+// containerURLFor replaces the path basename of rawURL with name,
+// preserving the query/fragment (same signed-URL correctness concern).
+func containerURLFor(rawURL, name string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	base := path.Base(u.Path)
+	if base == "" || base == "." || base == "/" {
+		return rawURL
+	}
+	u.Path = strings.TrimSuffix(u.Path, base) + name
+	return u.String()
+}
+
 // autoDetectRemoteSidecar probes, in parallel, <url>.md5/.sha1/.sha256/.sha512
 // sidecars and container checksum files (Arch `sha256sums.txt`,
 // Ubuntu/Debian `SHA256SUMS`, `sha512sums.txt`, `SHA512SUMS`) in the same
@@ -91,7 +119,6 @@ func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex 
 	if base == "" || base == "." || base == "/" {
 		return "", "", nil
 	}
-	dir := strings.TrimSuffix(rawURL, base)
 
 	type candidate struct {
 		url  string
@@ -99,10 +126,10 @@ func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex 
 	}
 	var cands []candidate
 	for _, suffix := range []string{".md5", ".sha1", ".sha256", ".sha512", ".md5sum", ".sha1sum", ".sha256sum", ".sha512sum"} {
-		cands = append(cands, candidate{url: rawURL + suffix})
+		cands = append(cands, candidate{url: sidecarURLFor(rawURL, suffix)})
 	}
 	for _, c := range []string{"sha256sums.txt", "SHA256SUMS", "sha512sums.txt", "SHA512SUMS"} {
-		cands = append(cands, candidate{url: dir + c, want: base})
+		cands = append(cands, candidate{url: containerURLFor(rawURL, c), want: base})
 	}
 
 	type result struct{ algo, hex string }

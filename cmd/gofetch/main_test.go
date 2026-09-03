@@ -802,3 +802,25 @@ func TestRunInfoChecksum(t *testing.T) {
 		t.Errorf("checksum = %q, want sha256", got.Checksum)
 	}
 }
+
+func TestSidecarURLPreservesQuery(t *testing.T) {
+	// Signed URLs (S3 presigned, CDN `?X-Amz-*`, `?download=1`) must have
+	// sidecar/container suffixes inserted into the PATH, never glued onto
+	// the query value.
+	raw := "https://bucket.s3.amazonaws.com/data/file.iso?X-Amz-Signature=abc123&download=1"
+	cases := []struct{ got, want string }{
+		{sidecarURLFor(raw, ".md5"), "https://bucket.s3.amazonaws.com/data/file.iso.md5?X-Amz-Signature=abc123&download=1"},
+		{sidecarURLFor(raw, ".sha256"), "https://bucket.s3.amazonaws.com/data/file.iso.sha256?X-Amz-Signature=abc123&download=1"},
+		{containerURLFor(raw, "SHA256SUMS"), "https://bucket.s3.amazonaws.com/data/SHA256SUMS?X-Amz-Signature=abc123&download=1"},
+		{containerURLFor(raw, "sha256sums.txt"), "https://bucket.s3.amazonaws.com/data/sha256sums.txt?X-Amz-Signature=abc123&download=1"},
+	}
+	for _, tt := range cases {
+		if tt.got != tt.want {
+			t.Errorf("got  %s\nwant %s", tt.got, tt.want)
+		}
+	}
+	// No-query URLs are unchanged in behavior.
+	if got := sidecarURLFor("https://host/a.bin", ".md5"); got != "https://host/a.bin.md5" {
+		t.Errorf("plain sidecar = %s", got)
+	}
+}

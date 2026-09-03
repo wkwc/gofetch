@@ -195,6 +195,14 @@ func ProbeURL(ctx context.Context, rawURL string) (ProbeInfo, error) {
 	}, nil
 }
 
+// Close releases the client's idle connections. Call after a download
+// (or a batch of downloads in one process) so keep-alive connections do
+// not accumulate: each transport holds up to MaxIdleConnsPerHost idle
+// connections (two goroutines each) for IdleConnTimeout. Idempotent.
+func (d *Downloader) Close() {
+	d.client.CloseIdleConnections()
+}
+
 // Download attempts each URL in order, falling over to mirrors on error.
 // On success it calls finalize with the active progress tracker and file
 // writer; on failure it returns the most-recent error.
