@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -703,5 +704,65 @@ func TestRunCACert(t *testing.T) {
 	badOut := filepath.Join(t.TempDir(), "bad.bin")
 	if code := run([]string{"--allow-loopback", "-q", "-o", badOut, srv.URL}); code != 1 {
 		t.Errorf("run without --ca-cert = %d, want 1", code)
+	}
+}
+
+func TestRunHashAutoContainer(t *testing.T) {
+	// A mirror that ships a SHA256SUMS container (Ubuntu/Debian style):
+	// `-h auto` must fetch it, find the entry for the file, and verify.
+	payload := bytes.Repeat([]byte("iso-data-"), 64*1024)
+	sh := sha256.Sum256(payload)
+	hex := hex.EncodeToString(sh[:])
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/distros/latest/file.iso":
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+		case "/distros/latest/SHA256SUMS":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(
+				"0000000000000000000000000000000000000000000000000000000000000000  other-file.iso\n" +
+					hex + "  ./latest/file.iso\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "file.iso")
+	code := run([]string{"--allow-loopback", "-q", "-h", "auto", "-o", out, srv.URL + "/distros/latest/file.iso"})
+	if code != 0 {
+		t.Fatalf("run(-h auto with SHA256SUMS container) = %d, want 0", code)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+func TestAutoDetectLocalSidecarContainer(t *testing.T) {
+	dir := t.TempDir()
+	hash := "be8458032f8105e60ee2a3067f950b6e3c007ee51b38dac50e8b48e765561c91"
+	// Write a SHA256SUMS container listing two files, one matching.
+	if err := os.WriteFile(filepath.Join(dir, "SHA256SUMS"),
+		[]byte(hash+"  archlinux-x86_64.iso\n"+"0000000000000000000000000000000000000000000000000000000000000000  other.iso\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "archlinux-x86_64.iso")
+	algo, hex, err := autoDetectLocalSidecar(out)
+	if err != nil {
+		t.Fatalf("autoDetectLocalSidecar: %v", err)
+	}
+	if algo != "sha256" || hex != hash {
+		t.Errorf("got %s:%s, want sha256:%s", algo, hex, hash)
+	}
+	// A file not listed in the container → no match, no error.
+	other := filepath.Join(dir, "unlisted.iso")
+	if algo, hex, err := autoDetectLocalSidecar(other); err != nil || algo != "" || hex != "" {
+		t.Errorf("unlisted file: algo=%q hex=%q err=%v, want empty", algo, hex, err)
 	}
 }

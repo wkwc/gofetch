@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -41,8 +44,10 @@ func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo
 }
 
 // autoDetectLocalSidecar looks for <out>.md5/.sha1/.sha256/.sha512 (and
-// *sum variants) next to the output file. This makes hash verification
-// work with zero configuration when a sidecar already sits beside the
+// *sum variants) next to the output file, then for a container checksum
+// file (SHA256SUMS / sha256sums.txt) in the output's directory, matching
+// the entry for the output's basename. This makes hash verification work
+// with zero configuration when a checksum already sits beside the
 // download — the common case for mirrors that ship checksums.
 func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
 	for _, suffix := range []string{".sha256", ".sha512", ".sha1", ".md5", ".sha256sum", ".sha512sum", ".sha1sum", ".md5sum"} {
@@ -52,14 +57,28 @@ func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
 		}
 		return fetch.ReadSidecarFile(path)
 	}
+	// Container checksum file in the output's directory.
+	dir := filepath.Dir(outPath)
+	for _, container := range []string{"SHA256SUMS", "sha256sums.txt", "SHA512SUMS", "sha512sums.txt"} {
+		data, readErr := os.ReadFile(filepath.Join(dir, container))
+		if readErr != nil {
+			continue
+		}
+		if algo, hex := fetch.ParseChecksumContainer(string(data), filepath.Base(outPath)); hex != "" {
+			return algo, hex, nil
+		}
+	}
 	return "", "", nil
 }
 
-// autoDetectRemoteSidecar fetches <url>.md5/.sha1/.sha256/.sha512 sidecars.
+// autoDetectRemoteSidecar fetches <url>.md5/.sha1/.sha256/.sha512 sidecars,
+// then falls back to container checksum files (Arch `sha256sums.txt`,
+// Ubuntu/Debian `SHA256SUMS`, `sha512sums.txt`, `SHA512SUMS`) in the same
+// directory, matching the entry for the file being downloaded.
 // The sidecar scheme matches the primary URL (http primary → http sidecar),
 // so datasets that ship MD5 checksums over plain http work too. A single
-// SSRF-hardened client is reused across suffix attempts so the transport
-// and connection pool are created once, not per attempt.
+// SSRF-hardened client is reused across attempts so the transport and
+// connection pool are created once, not per attempt.
 func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex string, err error) {
 	client := fetch.NewSafeClient(15 * time.Second)
 	for _, suffix := range []string{".md5", ".sha1", ".sha256", ".sha512", ".md5sum", ".sha1sum", ".sha256sum", ".sha512sum"} {
@@ -69,5 +88,26 @@ func autoDetectRemoteSidecar(ctx context.Context, rawURL string) (algo, hashHex 
 			return algo, hex, nil
 		}
 	}
+	// Container checksum files live in the URL's directory, keyed by the
+	// basename of the file being downloaded.
+	base := path.Base(urlPath(rawURL))
+	if base == "" || base == "." || base == "/" {
+		return "", "", nil
+	}
+	dir := strings.TrimSuffix(rawURL, base)
+	for _, container := range []string{"sha256sums.txt", "SHA256SUMS", "sha512sums.txt", "SHA512SUMS"} {
+		algo, hex, _ := fetch.FetchChecksumForFile(ctx, client, dir+container, base)
+		if hex != "" {
+			return algo, hex, nil
+		}
+	}
 	return "", "", nil // no sidecar found — silently skip
+}
+
+// urlPath returns the parsed URL path, defaulting to the raw string.
+func urlPath(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil {
+		return u.Path
+	}
+	return rawURL
 }

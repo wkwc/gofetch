@@ -176,3 +176,30 @@ func TestFetchSidecarHashHTTP(t *testing.T) {
 		t.Errorf("got %s:%s, want sha256:%s", algo, hex, hash)
 	}
 }
+
+func TestParseChecksumContainer(t *testing.T) {
+	iso := strings.Repeat("ab", 32)
+	kernel := strings.Repeat("cd", 32)
+	content := iso + "  ubuntu-24.04.3-desktop-amd64.iso\n" +
+		kernel + "  ./linux-kernel.tar.gz\n" +
+		"zz-not-hex  bad.bin\n"
+
+	cases := []struct {
+		want string
+		hex  string
+	}{
+		{"ubuntu-24.04.3-desktop-amd64.iso", iso},
+		{"./linux-kernel.tar.gz", kernel}, // basename match
+		{"other.iso", ""},                 // no match
+		{"bad.bin", ""},                   // invalid hex skipped
+	}
+	for _, tt := range cases {
+		algo, hex := ParseChecksumContainer(content, tt.want)
+		if hex != tt.hex {
+			t.Errorf("ParseChecksumContainer(%q) hex = %q, want %q", tt.want, hex, tt.hex)
+		}
+		if tt.hex != "" && algo != "sha256" {
+			t.Errorf("ParseChecksumContainer(%q) algo = %q, want sha256", tt.want, algo)
+		}
+	}
+}

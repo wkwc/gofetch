@@ -189,13 +189,19 @@ The `-h` flag supports multiple formats:
 | `sha1:hex` | `gofetch -h sha1:...` |
 | `sha256:hex` | `gofetch -h sha256:abc123...` |
 | `sha512:hex` | `gofetch -h sha512:abc123...` |
-| `auto` | local sidecar first, else fetches `URL.md5`/`URL.sha1`/`URL.sha256`/`URL.sha512` sidecars (scheme matches the primary URL; SSRF host guard applies) |
+| `auto` | local sidecar first, else fetches `URL.md5`/`URL.sha1`/`URL.sha256`/`URL.sha512` sidecars, then falls back to container checksum files (`sha256sums.txt` / `SHA256SUMS`) in the same directory (Linux ISO mirrors). Scheme matches the primary URL; SSRF host guard applies |
 | bare hex (32 → md5, 40 → sha1, 64 → sha256, 128 → sha512) | `gofetch -h abc123...` |
 | local sidecar file | `gofetch -h /path/file.sha256 https://...` |
 
 MD5 and SHA-1 are supported for **integrity verification** of third-party
 dataset files (the algorithms those publishers ship); they are not
 collision-resistant, so prefer sha256/sha512 when tamper resistance matters.
+
+`-h auto` (and the zero-config default) also understands **container
+checksum files** — `sha256sums.txt` (Arch) / `SHA256SUMS` (Ubuntu, Debian) —
+both next to the local output and on the remote mirror, matching the entry
+for the file being downloaded. So `gofetch -h auto <arch-iso-url>` verifies a
+Linux ISO with zero configuration:
 
 Integrity verification is zero-config when a checksum sidecar already sits
 beside the output (the common case for mirrors that ship `.sha256`/`.sha512`
