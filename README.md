@@ -124,7 +124,9 @@ The progress bar is terminal-aware: on a TTY it renders the live `\r` bar;
 when stderr is piped or redirected it stays headless-clean, printing a single
 plain final line (no ANSI codes). On Ctrl-C/SIGTERM the partial download is
 preserved to the resume sidecar and gofetch exits with status 130, printing
-`interrupted; partial progress saved, re-run to resume`.
+`interrupted; partial progress saved to <out>.gofetch.resume, re-run to resume` —
+the resume sidecar is the authoritative completeness marker (its absence means the
+file is complete; an interrupted file is full-size but sparse).
 
 ## Why
 
@@ -173,7 +175,7 @@ but "parallel curl."
 | `0` | All requested downloads succeeded (or were skipped by `--no-clobber`) |
 | `1` | Any download/probe failed (multi-URL mode continues past per-file failures) |
 | `2` | Usage / flag error |
-| `130` | Interrupted (Ctrl-C / SIGTERM / SIGHUP); partial progress saved, re-run to resume |
+| `130` | Interrupted (Ctrl-C / SIGTERM / SIGHUP); partial saved to `<out>.gofetch.resume`, re-run to resume |
 
 The output path is printed to stdout only on success; all progress, summary, and
 errors go to stderr, so `gofetch -q URL 2>/dev/null` prints just the filename.

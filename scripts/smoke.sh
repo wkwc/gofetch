@@ -138,7 +138,7 @@ echo "== interrupt (SIGINT -> 130, resume sidecar kept) =="
 if [ "$LOCAL" = 1 ]; then
   bench_stop_server
   bench_start_server 32
-  "$GOFETCH" --allow-loopback -q --limit-rate 8M -o "$TMP/int.bin" "$URL" >/dev/null 2>&1 &
+  "$GOFETCH" --allow-loopback -q --limit-rate 8M -o "$TMP/int.bin" "$URL" 2>"$TMP/int.err" &
   PID=$!
   sleep 0.3
   kill -INT "$PID"
@@ -146,6 +146,7 @@ if [ "$LOCAL" = 1 ]; then
   CODE=$?
   [ "$CODE" -eq 130 ] && ok "SIGINT exit 130 (got $CODE)" || bad "SIGINT exit $CODE, want 130"
   [ -e "$TMP/int.bin.gofetch.resume" ] && ok "resume sidecar kept" || bad "resume sidecar missing"
+  grep -q "gofetch.resume" "$TMP/int.err" && ok "interrupt message names the resume sidecar" || bad "interrupt message lacks sidecar path: $(cat "$TMP/int.err")"
   # Resume completes against the still-running 128MB server.
   runl 0 -- -q --limit-rate 8M -o "$TMP/int.bin" "$URL"
   bench_stop_server

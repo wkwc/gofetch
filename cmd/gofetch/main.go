@@ -258,7 +258,9 @@ func run(args []string) int {
 			// flushed to the resume sidecar, so say so plainly instead of
 			// wrapping it as a mirror error.
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				fmt.Fprintln(os.Stderr, "gofetch: interrupted; partial progress saved, re-run to resume")
+				fmt.Fprintf(os.Stderr,
+					"gofetch: interrupted; partial progress saved to %s, re-run to resume\n",
+					out+".gofetch.resume")
 				return 130
 			}
 			fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", rawURL, err)
