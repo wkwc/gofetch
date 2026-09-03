@@ -312,6 +312,20 @@ stdout/stderr separation, sidecar auto-detection, mirror fallback, rate
 limiting, manifest output, `--no-clobber`, and that Ctrl-C leaves a resumable
 partial file. Runs in CI on every push.
 
+## Real-world tests
+
+```bash
+./scripts/realworld.sh        # functional tests against real public servers
+BENCH=1 ./scripts/realworld.sh  # + gofetch vs aria2c benchmark on real internet
+```
+
+Network-dependent (run manually or on-demand), so it never gates CI. Proves
+against real servers: byte-equality on `proof.ovh.net` (the README's canonical
+download), `--info` range/size detection, multi-hop 302 redirects via
+`httpbin.org`, arXiv PDFs over HTTPS with MD5, bulk multi-URL downloads, real
+rate limiting, and (network permitting) interrupt/resume of a 100 MB file.
+Flaky upstreams degrade to a reported skip, never a false failure.
+
 Measurements on a Linux 16-core test box (loopback, fresh server per
 run, 64 MB):
 
