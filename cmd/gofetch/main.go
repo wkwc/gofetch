@@ -323,11 +323,7 @@ func emitProbeJSON(rawURL string, p fetch.ProbeInfo, err error, checksum string)
 func resolveOutputs(outPath string, rawURLs []string) ([]string, error) {
 	outs := make([]string, len(rawURLs))
 	if len(rawURLs) == 1 {
-		out, err := resolveOut(outPath, rawURLs[0])
-		if err != nil {
-			return nil, err
-		}
-		outs[0] = out
+		outs[0] = resolveOut(outPath, rawURLs[0])
 		return outs, nil
 	}
 
@@ -359,15 +355,15 @@ func resolveOutputs(outPath string, rawURLs []string) ([]string, error) {
 
 // resolveOut derives a single URL's output path. An empty -o uses the
 // URL basename; an existing directory -o means "download into it".
-func resolveOut(outPath, rawURL string) (string, error) {
+func resolveOut(outPath, rawURL string) string {
 	base := urlBaseName(rawURL)
 	if outPath == "" {
-		return base, nil
+		return base
 	}
 	if info, err := os.Stat(outPath); err == nil && info.IsDir() {
-		return filepath.Join(outPath, base), nil
+		return filepath.Join(outPath, base)
 	}
-	return outPath, nil
+	return outPath
 }
 
 // urlBaseName returns the URL path basename, defaulting for empty/root.

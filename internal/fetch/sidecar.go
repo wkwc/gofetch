@@ -40,13 +40,13 @@ func ParseSidecarContent(content, sourcePath string) (algo, hashHex string, err 
 	// Fall back to the file extension.
 	switch {
 	case strings.HasSuffix(sourcePath, ".sha256"), strings.HasSuffix(sourcePath, ".sha256sum"):
-		return "sha256", hexHash, nil
+		return algoSHA256, hexHash, nil
 	case strings.HasSuffix(sourcePath, ".sha512"), strings.HasSuffix(sourcePath, ".sha512sum"):
-		return "sha512", hexHash, nil
+		return algoSHA512, hexHash, nil
 	case strings.HasSuffix(sourcePath, ".sha1"), strings.HasSuffix(sourcePath, ".sha1sum"):
-		return "sha1", hexHash, nil
+		return algoSHA1, hexHash, nil
 	case strings.HasSuffix(sourcePath, ".md5"), strings.HasSuffix(sourcePath, ".md5sum"):
-		return "md5", hexHash, nil
+		return algoMD5, hexHash, nil
 	}
 	return "", "", fmt.Errorf("cannot determine hash algorithm from sidecar (hex length %d): %s", len(hexHash), sourcePath)
 }
@@ -133,7 +133,7 @@ func FetchSidecarHash(ctx context.Context, client *http.Client, sidecarURL strin
 // algoForLen infers the hash algorithm from hex length (32=md5, 40=sha1,
 // 64=sha256, 128=sha512). Shared by the sidecar and container parsers.
 func algoForLen(h string) (string, bool) {
-	for _, algo := range []string{"md5", "sha1", "sha256", "sha512"} {
+	for _, algo := range []string{algoMD5, algoSHA1, algoSHA256, algoSHA512} {
 		if len(h) == hashSize(algo)*2 {
 			return algo, true
 		}
@@ -170,6 +170,9 @@ func ParseChecksumContainer(content, want string) (algo, hashHex string) {
 // entry for want (matched on the final path component). Returns no error
 // and empty values when the container is missing or has no matching entry.
 func FetchChecksumForFile(ctx context.Context, client *http.Client, containerURL, want string) (algo, hashHex string, err error) {
+	// Best-effort auto-detection: a missing or unreachable container (404,
+	// connection error, empty) is NOT an error — it means "no checksum
+	// here", and the caller moves on. Only a matched entry is a result.
 	content, err := fetchSidecarContent(ctx, client, containerURL)
 	if err != nil {
 		return "", "", nil // container absent or unreachable → not a finding

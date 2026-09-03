@@ -17,17 +17,26 @@ import (
 // Matches the worker read-buffer pool so fileHexHash shares it.
 const hashBufSize = bufSizeLarge
 
+// Hash algorithm names — used in switches, sidecars, manifests and resume
+// sidecars, so keep them as constants (typo-proof, deduplicated).
+const (
+	algoMD5    = "md5"
+	algoSHA1   = "sha1"
+	algoSHA256 = "sha256"
+	algoSHA512 = "sha512"
+)
+
 // newHash returns a hash.Hash for the given algorithm name.
 // md5 and sha1 are supported for integrity verification of third-party
 // datasets (Zenodo/4TU/Planck publish them); they are not collision
 // resistant, so use sha256/sha512 when tamper resistance matters.
 func newHash(algo string) hash.Hash {
 	switch algo {
-	case "sha512":
+	case algoSHA512:
 		return sha512.New()
-	case "sha1":
+	case algoSHA1:
 		return sha1.New()
-	case "md5":
+	case algoMD5:
 		return md5.New()
 	default:
 		return sha256.New()
@@ -37,11 +46,11 @@ func newHash(algo string) hash.Hash {
 // hashSize returns the digest size for the given algorithm.
 func hashSize(algo string) int {
 	switch algo {
-	case "sha512":
+	case algoSHA512:
 		return sha512.Size
-	case "sha1":
+	case algoSHA1:
 		return sha1.Size
-	case "md5":
+	case algoMD5:
 		return md5.Size
 	default:
 		return sha256.Size
@@ -61,7 +70,7 @@ func ParseHashFlag(s string) (algo, hexHash string, err error) {
 		a := strings.ToLower(s[:idx])
 		h := s[idx+1:]
 		switch a {
-		case "sha256", "sha512", "sha1", "md5":
+		case algoSHA256, algoSHA512, algoSHA1, algoMD5:
 		default:
 			return "", "", fmt.Errorf("unsupported hash algorithm %q (use sha256, sha512, sha1, or md5)", a)
 		}
@@ -71,7 +80,7 @@ func ParseHashFlag(s string) (algo, hexHash string, err error) {
 		return a, h, nil
 	}
 	// Bare hex — infer the algorithm from the length.
-	for _, algo := range []string{"md5", "sha1", "sha256", "sha512"} {
+	for _, algo := range []string{algoMD5, algoSHA1, algoSHA256, algoSHA512} {
 		if len(s) == hashSize(algo)*2 {
 			if err := validateHexHash(s, algo); err != nil {
 				return "", "", err

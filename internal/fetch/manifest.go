@@ -37,7 +37,7 @@ func ManifestForFile(path, algo string, chunkSize int64) (*Manifest, error) {
 		chunkSize = minSeedChunk
 	}
 	if algo == "" {
-		algo = "sha256"
+		algo = algoSHA256
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -101,7 +101,7 @@ func LoadManifest(path string) (*Manifest, error) {
 		return nil, fmt.Errorf("manifest: unsupported version %d", m.Version)
 	}
 	if m.Algo == "" {
-		m.Algo = "sha256"
+		m.Algo = algoSHA256
 	}
 	// Validate chunk geometry: discard any chunk where End < Start.
 	// A corrupt manifest with inverted ranges would cause integer

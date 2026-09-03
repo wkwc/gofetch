@@ -132,7 +132,7 @@ func testCtx(t testing.TB, d time.Duration) context.Context {
 // downloadAndVerify downloads payload from a fresh range server into a
 // temp file with the given options and asserts byte equality. Returns the
 // output path for tests that need to inspect it further.
-func downloadAndVerify(t *testing.T, payload []byte, opt Options) string {
+func downloadAndVerify(t *testing.T, payload []byte, opt Options) {
 	t.Helper()
 	srv := newRangeServer(t, payload, nil)
 	out := filepath.Join(t.TempDir(), "out.bin")
@@ -147,5 +147,4 @@ func downloadAndVerify(t *testing.T, payload []byte, opt Options) string {
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
 	}
-	return out
 }
