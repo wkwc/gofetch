@@ -341,7 +341,9 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 - `go vet`, `gofmt`, `go build` clean.
 - Race detector clean (`go test -race`).
 - `staticcheck` clean.
-- 145+ tests (unit, e2e, and fuzz seed corpora) pass under `-race -shuffle=on`.
+- 160+ tests pass under `-race -shuffle=on`, including:
+  - **differential tests** checking the range algebra (`splitRange`, `uncompleted`, `dedupTasks`) against brute-force oracles on thousands of randomized inputs;
+  - **chaos tests** that randomly truncate/reset/mislabel server responses and assert the downloader either converges to byte-perfect output or fails cleanly — never silent corruption.
 
 ## License
 

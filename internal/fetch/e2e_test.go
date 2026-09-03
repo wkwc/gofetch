@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -563,4 +564,137 @@ func TestEndToEndWithMD5Verify(t *testing.T) {
 	m := md5.Sum(payload)
 	expected := hex.EncodeToString(m[:])
 	downloadAndVerify(t, payload, Options{HashAlgo: "md5", ExpectedHash: expected})
+}
+
+// newChaosServer serves a range-able payload while randomly injecting
+// failures (mid-range truncation, abrupt connection reset, retryable
+// 503, wrong Content-Range, wrong Content-Length). Seeded so runs are
+// reproducible.
+func newChaosServer(t *testing.T, payload []byte, rng *rand.Rand) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex // guards rng; handlers run in parallel workers
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		rh := r.Header.Get("Range")
+		if rh == "" {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+			return
+		}
+		var start, end int64
+		_, _ = fmt.Sscanf(rh, "bytes=%d-%d", &start, &end)
+		if end >= int64(len(payload)) {
+			end = int64(len(payload)) - 1
+		}
+		mu.Lock()
+		roll := rng.IntN(100)
+		mu.Unlock()
+		switch {
+		case roll < 70: // serve correctly
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[start : end+1])
+		case roll < 80: // promise full range, write half, then close
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.WriteHeader(http.StatusPartialContent)
+			half := start + (end-start+1)/2
+			_, _ = w.Write(payload[start : half+1])
+		case roll < 85: // abrupt connection reset after headers
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.WriteHeader(http.StatusPartialContent)
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, err := hj.Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+			}
+		case roll < 90: // retryable 503 with a short Retry-After
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "busy", http.StatusServiceUnavailable)
+		case roll < 95: // wrong Content-Range → hard task error
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start+1, end+1, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[start : end+1])
+		default: // wrong Content-Length vs body → short read
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", (end-start+1)/2))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[start : end+1])
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestChaosServerNoSilentCorruption runs downloads against a server that
+// randomly corrupts/truncates/resets responses, with whole-file hash
+// verification on. The invariant: a nil error implies byte-perfect
+// output — the downloader must either converge to correct bytes or fail,
+// never succeed with corrupt data.
+func TestChaosServerNoSilentCorruption(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+	expected := sha256Hex(payload)
+	for seed := uint64(1); seed <= 4; seed++ {
+		rng := rand.New(rand.NewPCG(seed, 0xfeed))
+		srv := newChaosServer(t, payload, rng)
+		out := filepath.Join(t.TempDir(), "out.bin")
+		d := NewDownloader(srv.URL, out, Options{
+			Quiet:        true,
+			NoResume:     true,
+			HashAlgo:     "sha256",
+			ExpectedHash: expected,
+		})
+		err := d.Download(testCtx(t, 45*time.Second))
+		got, _ := os.ReadFile(out)
+		if err == nil && !bytes.Equal(got, payload) {
+			t.Fatalf("seed %d: SUCCESS with corrupt output (%d bytes, want %d)", seed, len(got), len(payload))
+		}
+		t.Logf("seed %d: err=%v", seed, err)
+	}
+}
+
+// TestChaosServerHardFailClean verifies the "fail cleanly" half of the
+// no-silent-corruption invariant: a server that always sends a wrong
+// Content-Range must produce a hard error, never a trusted success.
+func TestChaosServerHardFailClean(t *testing.T) {
+	payload := makePayload(1 * 1024 * 1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.Header.Get("Range") == "" {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+			return
+		}
+		// Always lie about the served slice.
+		w.Header().Set("Content-Range", "bytes 999999-1999999/2000000")
+		w.Header().Set("Content-Length", "1")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte{0})
+	}))
+	t.Cleanup(srv.Close)
+
+	out := filepath.Join(t.TempDir(), "out.bin")
+	d := NewDownloader(srv.URL, out, Options{Quiet: true, NoResume: true})
+	if err := d.Download(testCtx(t, 30*time.Second)); err == nil {
+		t.Fatal("expected a hard error from wrong Content-Range, got success")
+	}
+	// The output must not be left looking complete.
+	if got, _ := os.ReadFile(out); bytes.Equal(got, payload) {
+		t.Fatal("output looks complete despite hard failure — must not be trusted")
+	}
 }
