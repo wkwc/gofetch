@@ -224,9 +224,9 @@ func (b *idleBody) Read(p []byte) (int, error) {
 }
 
 // drainResult waits up to 2s (reusing b.drainTimer) for the helper
-// goroutine's response to a cancelled read, then releases tmp. It
-// returns false when the timeout won, meaning the caller should stop
-// the read rather than trust resCh.
+// goroutine's response to a cancelled read, then releases tmp. It returns
+// false when the timeout won, meaning the caller should stop the read
+// rather than trust resCh.
 func (b *idleBody) drainResult(resCh chan readResult, tmp []byte) bool {
 	stopDrain(b.drainTimer)
 	b.drainTimer.Reset(2 * time.Second)
@@ -235,7 +235,12 @@ func (b *idleBody) drainResult(resCh chan readResult, tmp []byte) bool {
 		releaseBuf(tmp)
 		return true
 	case <-b.drainTimer.C:
-		releaseBuf(tmp)
+		// The helper may STILL be reading into tmp: a reader that does not
+		// unblock on Close would keep the read in flight past the timeout.
+		// Releasing tmp here would return it to the pool while a goroutine
+		// writes to it — a use-after-free if another read re-acquires it.
+		// Leak the buffer instead: a per-stalled-read leak is bounded and
+		// safe, and only occurs for readers that ignore Close.
 		return false
 	}
 }

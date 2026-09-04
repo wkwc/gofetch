@@ -120,3 +120,28 @@ func TestIdleBodyDeadlinePathCancel(t *testing.T) {
 	}
 	_ = body.Close()
 }
+
+// stuckReader blocks forever on Read and ignores Close — simulating a
+// reader that will not unblock, so the helper goroutine stays in flight
+// past the drain timeout.
+type stuckReader struct{ block chan struct{} }
+
+func (s *stuckReader) Read([]byte) (int, error) {
+	<-s.block // never closed
+	return 0, io.EOF
+}
+func (s *stuckReader) Close() error { return nil }
+
+// TestIdleBodyGoroutinePathTimeout pins the use-after-free fix: when the
+// helper's read cannot be unblocked (Close ignored), drainResult times out
+// and idleBody returns errBodyIdle WITHOUT returning the in-flight buffer
+// to the pool.
+func TestIdleBodyGoroutinePathTimeout(t *testing.T) {
+	r := &stuckReader{block: make(chan struct{})}
+	body := newIdleBody(context.Background(), r, 50*time.Millisecond)
+	_, err := body.Read(make([]byte, 16))
+	if !errors.Is(err, errBodyIdle) {
+		t.Fatalf("err = %v, want errBodyIdle (drain timeout path)", err)
+	}
+	_ = body.Close()
+}
