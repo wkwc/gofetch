@@ -130,11 +130,11 @@ func run(args []string) int {
 		}
 	}
 	if *workers < 0 || *workers > 256 {
-		fmt.Fprintln(os.Stderr, "gofetch: -x workers must be between 1 and 256")
+		fmt.Fprintln(os.Stderr, "gofetch: -x workers must be 0 (auto) or between 1 and 256")
 		return 1
 	}
 	if *maxRetries < 0 || *maxRetries > 100 {
-		fmt.Fprintln(os.Stderr, "gofetch: --max-retries must be between 1 and 100")
+		fmt.Fprintln(os.Stderr, "gofetch: --max-retries must be 0 (auto) or between 1 and 100")
 		return 1
 	}
 	if *jsonOut && !*info {
