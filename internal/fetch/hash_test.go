@@ -156,3 +156,37 @@ func TestValidateHexHash(t *testing.T) {
 		t.Error("wrong length for sha512: expected error")
 	}
 }
+
+// TestAlgoInferenceConsistency verifies every hash parser and helper
+// agrees on the algorithm for the same hex: algoForLen, ParseHashFlag
+// (bare and algo:hex), ParseSidecarContent, and hashSize must all
+// infer identical results.
+func TestAlgoInferenceConsistency(t *testing.T) {
+	for _, algo := range []string{algoMD5, algoSHA1, algoSHA256, algoSHA512} {
+		hex := strings.Repeat("a", hashSize(algo)*2)
+
+		got, ok := algoForLen(hex)
+		if !ok || got != algo {
+			t.Errorf("algoForLen(%d) = %s/%v, want %s", len(hex), got, ok, algo)
+		}
+
+		a1, h1, err := ParseHashFlag(hex)
+		if err != nil || a1 != algo || h1 != hex {
+			t.Errorf("ParseHashFlag(bare %s) = %s/%s/%v", algo, a1, h1, err)
+		}
+
+		a2, _, err := ParseHashFlag(algo + ":" + hex)
+		if err != nil || a2 != algo {
+			t.Errorf("ParseHashFlag(%s:hex) = %s/%v", algo, a2, err)
+		}
+
+		a3, h3, err := ParseSidecarContent(hex+"  f.bin\n", "f")
+		if err != nil || a3 != algo || h3 != hex {
+			t.Errorf("ParseSidecarContent(%s) = %s/%s/%v", algo, a3, h3, err)
+		}
+
+		if len(hex) != hashSize(algo)*2 {
+			t.Errorf("hashSize(%s) length mismatch", algo)
+		}
+	}
+}

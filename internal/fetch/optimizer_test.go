@@ -125,3 +125,32 @@ func TestBackoffCapAndJitter(t *testing.T) {
 		}
 	}
 }
+
+// TestAutoTuningInvariants pins the auto-tuning's hard invariants: worker
+// count is never 0 and caps at 32; buffer sizes are never 0 and match the
+// documented size thresholds.
+func TestAutoTuningInvariants(t *testing.T) {
+	for _, cores := range []int{1, 2, 8, 64} {
+		if w := scaleWorkers(0, cores); w < 4 || w > 12 {
+			t.Errorf("scaleWorkers(0,%d) = %d, want 4-12", cores, w)
+		}
+		if w := scaleWorkers(1<<40, cores); w > 32 {
+			t.Errorf("scaleWorkers(1TB,%d) = %d, want <=32", cores, w)
+		}
+	}
+	for _, s := range []int64{0, 1, 1 << 20, 100 << 20, 1 << 30} {
+		if b := scaleBufSize(s); b < 32<<10 || b > 256<<10 {
+			t.Errorf("scaleBufSize(%d) = %d, want 32K-256K", s, b)
+		}
+	}
+	// Documented thresholds.
+	if b := scaleBufSize(100); b != 32<<10 {
+		t.Errorf("scaleBufSize(small) = %d, want 32K", b)
+	}
+	if b := scaleBufSize(50 << 20); b != 64<<10 {
+		t.Errorf("scaleBufSize(50MB) = %d, want 64K", b)
+	}
+	if b := scaleBufSize(500 << 20); b != 256<<10 {
+		t.Errorf("scaleBufSize(500MB) = %d, want 256K", b)
+	}
+}
