@@ -27,6 +27,8 @@ fi
 echo "==> fuzzing every target (${FUZZTIME} each; override with FUZZTIME=2m)"
 for t in $(list_targets); do
   echo "--- ${t}"
-  go test ./internal/fetch/ -run '^$' -fuzz "^${t}$" -fuzztime "${FUZZTIME}" || true
+  # set -e propagates a fuzz failure (a crash or invariant violation) so
+  # CI fails loudly instead of swallowing it with `|| true`.
+  go test ./internal/fetch/ -run '^$' -fuzz "^${t}$" -fuzztime "${FUZZTIME}"
 done
 echo "==> done"

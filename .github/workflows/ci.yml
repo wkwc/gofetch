@@ -68,8 +68,10 @@ jobs:
       - name: CLI smoke test (black-box)
         run: ./scripts/smoke.sh
 
-      - name: Fuzz smoke (15s)
-        run: go test ./internal/fetch/ -run '^$' -fuzz '^FuzzParseContentRange$' -fuzztime 15s
+      # Fuzz every target briefly (5s each) — a single-target smoke missed
+      # stale invariants in the hash/sidecar parsers, so cover them all.
+      - name: Fuzz smoke (all targets, 5s each)
+        run: FUZZTIME=5s ./scripts/fuzz.sh
 
   build:
     name: Build Release Binary

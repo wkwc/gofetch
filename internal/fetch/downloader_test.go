@@ -4,6 +4,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"net/http/httptest"
+	"net/http"
+	"encoding/pem"
 	"testing"
 )
 
@@ -182,5 +185,49 @@ func TestRetryMaxOverride(t *testing.T) {
 	d2 := NewDownloader("http://example.com/file.bin", "out.bin", Options{})
 	if d2.autoConfig.RetryMax != 10 {
 		t.Errorf("default RetryMax = %d, want 10", d2.autoConfig.RetryMax)
+	}
+}
+
+func TestNewTransport(t *testing.T) {
+	tr := NewTransport(Options{Workers: 4, BufSize: 64 << 10})
+	defer tr.CloseIdleConnections()
+	if tr.MaxIdleConnsPerHost != 4 {
+		t.Errorf("MaxIdleConnsPerHost = %d, want 4", tr.MaxIdleConnsPerHost)
+	}
+	if tr.DialContext == nil {
+		t.Error("expected an SSRF-hardened DialContext")
+	}
+	// Workers=0 -> auto-derived (>= 4).
+	tr2 := NewTransport(Options{})
+	defer tr2.CloseIdleConnections()
+	if tr2.MaxIdleConnsPerHost < 4 {
+		t.Errorf("auto MaxIdleConnsPerHost = %d, want >= 4", tr2.MaxIdleConnsPerHost)
+	}
+}
+
+func TestValidateCACert(t *testing.T) {
+	dir := t.TempDir()
+	// A real (self-signed) certificate validates.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	t.Cleanup(srv.Close)
+	valid := filepath.Join(dir, "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(valid, pemBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCACert(valid); err != nil {
+		t.Errorf("ValidateCACert(valid) = %v, want nil", err)
+	}
+
+	// Missing and non-certificate files are rejected.
+	if err := ValidateCACert(filepath.Join(dir, "nope.pem")); err == nil {
+		t.Error("expected error for missing file")
+	}
+	garbage := filepath.Join(dir, "garbage.pem")
+	if err := os.WriteFile(garbage, []byte("not a cert\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateCACert(garbage); err == nil {
+		t.Error("expected error for a file with no certificates")
 	}
 }
