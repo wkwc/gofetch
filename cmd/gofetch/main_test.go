@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -841,5 +842,46 @@ func TestRunCACertValidation(t *testing.T) {
 	}
 	if code := run([]string{"--ca-cert", notCert, "--info", "https://example.com"}); code != 1 {
 		t.Errorf("run(--ca-cert no certs) = %d, want 1", code)
+	}
+}
+
+// TestCLISoakVariedFlags runs the full CLI 30 times with randomized flag
+// combinations (pwrite, worker/buf overrides, rate limit), verifying exit
+// code AND content each time. Integration test for flag parsing, transport
+// wiring, and verification under -race.
+func TestCLISoakVariedFlags(t *testing.T) {
+	payload := bytes.Repeat([]byte("soakdata-"), 64*1024)
+	srv := newTestServer(t, payload)
+	sh := sha256.Sum256(payload)
+	hex := hex.EncodeToString(sh[:])
+	rng := rand.New(rand.NewPCG(1, 2))
+	for i := 0; i < 30; i++ {
+		out := filepath.Join(t.TempDir(), "o.bin")
+		args := []string{"--allow-loopback", "-q"}
+		switch rng.IntN(6) {
+		case 0:
+			args = append(args, "--no-mmap")
+		case 1:
+			args = append(args, "-x", "4")
+		case 2:
+			args = append(args, "--buf-size", "64k")
+		case 3:
+			args = append(args, "--limit-rate", "50M")
+		case 4:
+			args = append(args, "-x", "2", "--no-mmap")
+		case 5:
+			args = append(args, "-x", "16", "--buf-size", "256k", "--no-mmap")
+		}
+		args = append(args, "-h", "sha256:"+hex, "-o", out, srv.URL)
+		if code := run(args); code != 0 {
+			t.Fatalf("iter %d: run %v = %d", i, args, code)
+		}
+		got, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("iter %d: content mismatch (%d bytes)", i, len(got))
+		}
 	}
 }
