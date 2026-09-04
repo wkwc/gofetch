@@ -10,7 +10,7 @@
 #   BENCH=1 ./scripts/realworld.sh    # + gofetch vs aria2c benchmark
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 source ./scripts/bench_lib.sh
 
 GOFETCH="${GOFETCH:-$(pwd)/gofetch}"

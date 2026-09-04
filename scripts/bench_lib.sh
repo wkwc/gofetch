@@ -11,7 +11,7 @@ TMPDIR=""
 SERVER_PID=""
 
 bench_setup() {
-  cd "${REPO_ROOT}"
+  cd "${REPO_ROOT}" || exit
   TMPDIR="$(mktemp -d)"
   trap bench_cleanup EXIT
 }

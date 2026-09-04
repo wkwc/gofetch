@@ -10,7 +10,7 @@
 #   ./scripts/smoke.sh https://example.com/f.bin # any real URL
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 source ./scripts/bench_lib.sh
 
 URL="${1:-http://127.0.0.1:9120/}"

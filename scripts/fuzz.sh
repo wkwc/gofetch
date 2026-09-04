@@ -10,7 +10,7 @@
 # (commit them; they become regression seeds for normal `go test`).
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 
 TARGET="${1:-}"
 FUZZTIME="${FUZZTIME:-30s}"

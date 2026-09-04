@@ -12,7 +12,7 @@
 #   URL       benchserver base URL (default http://127.0.0.1:9120/)
 set -uo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit
 source ./bench_lib.sh
 
 RUNS="${RUNS:-3}"

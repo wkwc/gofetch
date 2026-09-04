@@ -7,7 +7,7 @@
 #   WINDOW=15 ./scripts/bench_real.sh https://example.com/big.iso
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit
 
 URL="${URL:-https://mirror.rackspace.com/archlinux/iso/latest/archlinux-x86_64.iso}"
 GOFETCH="${GOFETCH:-$(pwd)/gofetch}"
