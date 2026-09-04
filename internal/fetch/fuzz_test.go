@@ -90,7 +90,9 @@ func FuzzParseHashFlag(f *testing.F) {
 			if hex == "" {
 				t.Fatalf("ParseHashFlag(%q) returned empty hex on success", v)
 			}
-			if algo != "sha256" && algo != "sha512" {
+			switch algo {
+			case "md5", "sha1", "sha256", "sha512":
+			default:
 				t.Fatalf("ParseHashFlag(%q) = algo %q", v, algo)
 			}
 		}
@@ -110,7 +112,9 @@ func FuzzParseSidecarContent(f *testing.F) {
 			if hex == "" {
 				t.Fatalf("ParseSidecarContent(%q,%q) empty hex", content, src)
 			}
-			if algo != "sha256" && algo != "sha512" {
+			switch algo {
+			case "md5", "sha1", "sha256", "sha512":
+			default:
 				t.Fatalf("ParseSidecarContent(%q,%q) algo=%q", content, src, algo)
 			}
 		}
