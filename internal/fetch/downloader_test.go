@@ -1,12 +1,12 @@
 package fetch
 
 import (
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
-	"net/http/httptest"
-	"net/http"
-	"encoding/pem"
 	"testing"
 )
 
