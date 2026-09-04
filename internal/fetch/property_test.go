@@ -158,3 +158,48 @@ func tasksEqual(a, b []Task) bool {
 	}
 	return true
 }
+
+// TestRangeAlgebraComposition verifies the FULL pipeline composes: the
+// gaps from uncompleted() exactly tile the uncovered region, and marking
+// those gaps as completed leaves nothing left. splitRange/dedupTasks
+// interact here in ways isolated differential tests don't cover.
+func TestRangeAlgebraComposition(t *testing.T) {
+	rng := rand.New(rand.NewPCG(42, 24))
+	for iter := 0; iter < 1000; iter++ {
+		full := Task{Start: 0, End: int64(rng.IntN(1000)) + 10}
+		var completed []Task
+		for i := 0; i < rng.IntN(5); i++ {
+			a, b := rng.IntN(int(full.End)+1), rng.IntN(int(full.End)+1)
+			if a > b {
+				a, b = b, a
+			}
+			completed = append(completed, Task{Start: int64(a), End: int64(b)})
+		}
+		completed = dedupTasks(completed)
+		gaps := uncompleted(full, completed)
+
+		// Gaps must be sorted, non-overlapping, and within bounds.
+		for i, g := range gaps {
+			if g.Start < full.Start || g.End > full.End || g.End < g.Start {
+				t.Fatalf("iter %d: gap %+v out of bounds for full %+v", iter, g, full)
+			}
+			if i > 0 && g.Start <= gaps[i-1].End {
+				t.Fatalf("iter %d: gaps overlap: %+v then %+v", iter, gaps[i-1], g)
+			}
+		}
+
+		// splitRange over each gap must tile it exactly.
+		for _, g := range gaps {
+			parts := splitRange(g.Start, g.Len(), 1<<20)
+			if len(parts) != 1 || parts[0] != g {
+				t.Fatalf("iter %d: splitRange(%+v) = %v, want the whole gap", iter, g, parts)
+			}
+		}
+
+		// Marking gaps as completed leaves nothing uncovered.
+		all := append(append([]Task{}, completed...), gaps...)
+		if rem := uncompleted(full, dedupTasks(all)); len(rem) != 0 {
+			t.Fatalf("iter %d: full coverage left %v", iter, rem)
+		}
+	}
+}
