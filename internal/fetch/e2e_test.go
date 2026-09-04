@@ -849,3 +849,68 @@ func TestNoGoroutineLeak(t *testing.T) {
 		t.Fatalf("goroutine leak: %d -> %d after 50 downloads", before, after)
 	}
 }
+
+// TestHTTPSResumeOverHTTP2 exercises resume across an HTTP/2 connection:
+// cancel a download mid-stream, resume, and verify byte-perfect output.
+func TestHTTPSResumeOverHTTP2(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+	var sawH2 atomic.Bool
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 {
+			sawH2.Store(true)
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if rh := r.Header.Get("Range"); rh != "" {
+			var start, end int64
+			_, _ = fmt.Sscanf(rh, "bytes=%d-%d", &start, &end)
+			if end >= int64(len(payload)) {
+				end = int64(len(payload)) - 1
+			}
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[start : end+1])
+			return
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	certPath := filepath.Join(t.TempDir(), "ca.pem")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(certPath, pemBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "out.bin")
+	// First attempt: interrupt early (real partial over h2).
+	d1 := NewDownloader(srv.URL, out, Options{CACert: certPath, Quiet: true})
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	_ = d1.Download(ctx1)
+	cancel1()
+
+	// Resume over h2 to completion.
+	d2 := NewDownloader(srv.URL, out, Options{CACert: certPath, Quiet: true})
+	if err := d2.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("resume over h2: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("content mismatch after h2 resume: got %d bytes, want %d", len(got), len(payload))
+	}
+	if !sawH2.Load() {
+		t.Error("expected HTTP/2 (ALPN), got HTTP/1.x")
+	}
+}
