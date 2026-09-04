@@ -43,6 +43,9 @@ type Downloader struct {
 	workersSet bool
 	bufSet     bool
 	noMmap     bool
+	// ownsTransport marks a self-built client transport, closed by Close().
+	// A shared transport (Options.Transport) is owned by the caller.
+	ownsTransport bool
 
 	lastResumeSaveMu sync.Mutex
 	lastResumeSave   time.Time
@@ -89,6 +92,11 @@ type Options struct {
 	// filesystems where mmap is problematic (NFS, FUSE, overcommit
 	// limits) or for comparison/benchmarking.
 	NoMmap bool
+	// Transport reuses an existing SSRF-hardened transport instead of
+	// building a fresh one, so a batch of downloads to the same host
+	// reuses keep-alive connections instead of re-handshaking per URL.
+	// When set, Close() does not close it (the caller owns it).
+	Transport *http.Transport
 }
 
 // NewDownloader constructs a Downloader with auto-configured defaults.
@@ -134,12 +142,31 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	// would kill multi-MB downloads after a few seconds. Per-phase
 	// limits live on the Transport (dial / TLS / response headers);
 	// overall deadline is the caller's context.
-	d.client = &http.Client{
-		Timeout:       0,
-		Transport:     newAutoTransport(ac, opt.Proxy, loadRootCAs(opt.CACert)),
-		CheckRedirect: CheckRedirectSafe,
+	if opt.Transport != nil {
+		d.client = &http.Client{Timeout: 0, Transport: opt.Transport, CheckRedirect: CheckRedirectSafe}
+	} else {
+		d.client = &http.Client{
+			Timeout:       0,
+			Transport:     newAutoTransport(ac, opt.Proxy, loadRootCAs(opt.CACert)),
+			CheckRedirect: CheckRedirectSafe,
+		}
+		d.ownsTransport = true
 	}
 	return d
+}
+
+// NewTransport builds an SSRF-hardened transport configured like a
+// downloader's, for reuse across multiple downloads in one process (a
+// shared keep-alive connection pool). Call CloseIdleConnections when done.
+func NewTransport(opt Options) *http.Transport {
+	ac := AutoConfigure(0)
+	if opt.Workers > 0 {
+		ac.Workers = opt.Workers
+	}
+	if opt.BufSize > 0 {
+		ac.BufSize = opt.BufSize
+	}
+	return newAutoTransport(ac, opt.Proxy, loadRootCAs(opt.CACert))
 }
 
 // ValidateCACert verifies that path is a readable PEM file containing at
@@ -214,7 +241,9 @@ func ProbeURL(ctx context.Context, rawURL string) (ProbeInfo, error) {
 // not accumulate: each transport holds up to MaxIdleConnsPerHost idle
 // connections (two goroutines each) for IdleConnTimeout. Idempotent.
 func (d *Downloader) Close() {
-	d.client.CloseIdleConnections()
+	if d.ownsTransport {
+		d.client.CloseIdleConnections()
+	}
 }
 
 // Download attempts each URL in order, falling over to mirrors on error.

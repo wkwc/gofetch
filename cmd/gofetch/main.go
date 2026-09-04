@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	fssys "io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -218,6 +219,16 @@ func run(args []string) int {
 		return 1
 	}
 
+	// Multi-URL batches share one transport so keep-alive connections
+	// carry across URLs to the same host (no per-URL TLS handshake).
+	var sharedTr *http.Transport
+	if len(rawURLs) > 1 {
+		sharedTr = fetch.NewTransport(fetch.Options{
+			Proxy: *proxy, CACert: *caCert, Workers: *workers, BufSize: int(bufBytes),
+		})
+		defer sharedTr.CloseIdleConnections()
+	}
+
 	exit := 0
 	for i, rawURL := range rawURLs {
 		out := outs[i]
@@ -254,6 +265,7 @@ func run(args []string) int {
 			RetryMax:     *maxRetries,
 			CACert:       *caCert,
 			NoMmap:       *noMmap,
+			Transport:    sharedTr,
 		})
 
 		err = d.Download(ctx)
