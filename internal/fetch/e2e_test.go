@@ -914,3 +914,41 @@ func TestHTTPSResumeOverHTTP2(t *testing.T) {
 		t.Error("expected HTTP/2 (ALPN), got HTTP/1.x")
 	}
 }
+
+// TestEndToEndManifestNoMmap exercises the manifest's non-mmap
+// verification path: with NoMmap the writer is a raw file, so per-task
+// verifyTaskRange uses the ReadAt re-read path (previously only run on
+// Windows / --no-mmap). A corrupt chunk must still abort the download.
+func TestEndToEndManifestNoMmap(t *testing.T) {
+	payload := makePayload(2 * 1024 * 1024)
+	srv := newRangeServer(t, payload, nil)
+
+	t.Run("valid", func(t *testing.T) {
+		outFile := filepath.Join(t.TempDir(), "out.bin")
+		if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, -1)); err != nil {
+			t.Fatal(err)
+		}
+		d := NewDownloader(srv.URL, outFile, Options{NoMmap: true, NoResume: true, Quiet: true})
+		if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+			t.Fatalf("Download with manifest over raw writer: %v", err)
+		}
+		got, err := os.ReadFile(outFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("content mismatch: got %d bytes, want %d", len(got), len(payload))
+		}
+	})
+
+	t.Run("corrupt chunk aborts", func(t *testing.T) {
+		outFile := filepath.Join(t.TempDir(), "out.bin")
+		if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, 1)); err != nil {
+			t.Fatal(err)
+		}
+		d := NewDownloader(srv.URL, outFile, Options{NoMmap: true, NoResume: true, Quiet: true})
+		if err := d.Download(testCtx(t, 30*time.Second)); err == nil {
+			t.Fatal("expected download to fail on a corrupt manifest chunk over the raw writer")
+		}
+	})
+}
