@@ -40,3 +40,60 @@ func TestQueue(t *testing.T) {
 		t.Fatal("Pop on now-empty queue should return false")
 	}
 }
+
+// TestQueueFIFOOrder verifies the ring buffer preserves FIFO order when
+// it fills, wraps, and grows (NewQueue(1) forces growth from the start).
+func TestQueueFIFOOrder(t *testing.T) {
+	for _, n := range []int{0, 1, 7, 8, 9, 100, 1000} {
+		q := NewQueue(n, 0)
+		for i := 0; i < n; i++ {
+			q.Push(Task{Start: int64(i)})
+		}
+		if q.Len() != n {
+			t.Fatalf("n=%d: Len=%d", n, q.Len())
+		}
+		for i := 0; i < n; i++ {
+			got, ok := q.Pop()
+			if !ok || got.Start != int64(i) {
+				t.Fatalf("n=%d: pop %d = %+v ok=%v", n, i, got, ok)
+			}
+		}
+		if _, ok := q.Pop(); ok {
+			t.Fatalf("n=%d: pop on empty succeeded", n)
+		}
+	}
+}
+
+// TestQueueFIFOInterleaved mixes pushes and pops so the ring wraps and
+// grows mid-stream; every pop must return the earliest not-yet-popped
+// value, and the drain must be exact.
+func TestQueueFIFOInterleaved(t *testing.T) {
+	q := NewQueue(1, 0) // tiny start to force growth
+	next, pushes := 0, 0
+	for i := 0; i < 1000; i++ {
+		if i%2 == 0 || i < 3 {
+			q.Push(Task{Start: int64(pushes)})
+			pushes++
+		}
+		if i%3 == 0 {
+			if got, ok := q.Pop(); ok && got.Start != int64(next) {
+				t.Fatalf("iter %d: pop %d, want %d", i, got.Start, next)
+			} else if ok {
+				next++
+			}
+		}
+	}
+	for {
+		got, ok := q.Pop()
+		if !ok {
+			break
+		}
+		if got.Start != int64(next) {
+			t.Fatalf("drain: pop %d, want %d", got.Start, next)
+		}
+		next++
+	}
+	if next != pushes {
+		t.Fatalf("popped %d, pushed %d", next, pushes)
+	}
+}
