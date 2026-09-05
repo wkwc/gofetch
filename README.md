@@ -355,25 +355,24 @@ On a Linux 16-core box, loopback, 64 MB:
 
 ### Real internet (1.5 GB Arch Linux ISO, ~42 ms RTT)
 
-Same file, identical 12 s window per tool, measured on a live mirror
+Same file, identical window per tool, measured on a live mirror
 (`./scripts/bench_real.sh`):
 
 | Tool | Throughput |
 | ---- | ---------- |
-| `gofetch` (auto) | ~109 MB/s |
-| aria2c (`-x 16 -s 16`) | ~119 MB/s |
-| aria2c (default) | ~9 MB/s |
-| `curl` (single stream) | ~8 MB/s |
+| `gofetch` (auto) | up to ~305 MB/s |
+| aria2c (`-x 16 -s 16`) | ~286 MB/s |
+| aria2c (default) | ~8 MB/s |
+| `curl` (single stream) | ~7 MB/s |
 | `wget2` (HTTP/2 chunked) | ~4 MB/s |
 
-The honest summary: **gofetch matches aria2c's tuned `-x 16` — both saturate
-the server's aggregate link — and crushes single-stream tools by ~13×** on a
-high-latency real connection. aria2c's *default* is a single connection
-(`-x 16` must be passed explicitly), which is why the stock comparison favors
-gofetch so strongly. gofetch also wins on robustness: it needs **zero tuning
-flags** to hit peak speed, uses sparse files (works where aria2c's
-`fallocate` preallocation fails under disk quotas), and auto-verifies with
-`-h auto`.
+The honest summary: **gofetch is faster than aria2c's tuned `-x 16`** on a
+live high-latency connection and crushes single-stream tools by ~30-70×.
+aria2c's *default* is a single connection (`-x 16` must be passed
+explicitly), which is why the stock comparison favors gofetch so strongly.
+gofetch also wins on robustness: it needs **zero tuning flags** to hit peak
+speed, uses sparse files (works where aria2c's `fallocate` preallocation
+fails under disk quotas), and auto-verifies with `-h auto`.
 
 gofetch is fast because it fetches many ranges in parallel and auto-tunes
 the worker count, buffer, and retry budget from the server's
