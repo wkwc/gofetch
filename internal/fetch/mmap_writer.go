@@ -67,7 +67,7 @@ func newMmapWriter(path string, size int64) (*mmapWriter, error) {
 	if size <= 0 || size > 1<<62 {
 		return nil, fmt.Errorf("mmap: invalid size %d", size)
 	}
-	fd, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	fd, err := openOutputFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func allocateFileWriter(path string, size int64, resume bool, noMmap bool) (file
 			return allocateMmapOrRaw(path, size, false)
 		}
 		// File exists at expected size: keep existing bytes.
-		fd, err := os.OpenFile(path, os.O_RDWR, 0o644)
+		fd, err := openOutputFile(path, os.O_RDWR, 0o644)
 		if err != nil {
 			return nil, err
 		}
@@ -238,7 +238,7 @@ func allocateRawFile(path string, size int64, resume bool) (fileWriter, error) {
 	if !resume {
 		flags |= os.O_TRUNC
 	}
-	fd, err := os.OpenFile(path, flags, 0o644)
+	fd, err := openOutputFile(path, flags, 0o644)
 	if err != nil {
 		return nil, err
 	}

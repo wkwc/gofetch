@@ -97,15 +97,14 @@ func (d *Downloader) saveResume(url string, completed []Task, states []*workerSt
 // and fsyncs the parent directory for crash durability.
 //
 // The tmp is cleared first so O_EXCL cannot permanently disable writes
-// after a prior crash orphaned a .tmp. Parent fsync: a renamed file's
-// metadata is only durable if the directory containing the rename's new
-// link is fsynced (see rename(2) NOTES). filepath.Dir never returns ""
-// (returns "." for relative paths). A failed parent fsync is returned so
-// callers don't treat the save as durable-succeeded, but the rename is
-// still attempted: a possibly-durable file is strictly better than a
-// guaranteed orphan .tmp. Parent open failures are quiet because some
-// environments (sandboxed CI, read-only root) cannot fsync the parent
-// but can still rename within it.
+// after a prior crash orphaned a .tmp. Parent fsync must happen *after*
+// rename: it is the directory entry created by rename that must reach disk.
+// filepath.Dir never returns "" (returns "." for relative paths). A failed
+// parent fsync is returned so callers don't treat the save as
+// durable-succeeded, but the rename is still attempted: a possibly-durable
+// file is strictly better than a guaranteed orphan. Parent open failures are
+// quiet because some environments (sandboxed CI, read-only root) cannot fsync
+// the parent but can still rename within it.
 func atomicWriteFile(path string, data []byte) error {
 	tmp := path + ".tmp"
 	_ = os.Remove(tmp)
@@ -127,15 +126,26 @@ func atomicWriteFile(path string, data []byte) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	var dirFsyncErr error
-	if df, err := os.Open(filepath.Dir(path)); err == nil {
-		dirFsyncErr = df.Sync()
-		_ = df.Close()
-	}
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	return dirFsyncErr
+	return syncParentDir(path)
+}
+
+// syncParentDir persists a preceding rename's directory entry. It is kept
+// separate from atomicWriteFile both to make the ordering obvious and to keep
+// the best-effort behavior for filesystems where directories cannot be synced.
+func syncParentDir(path string) error {
+	df, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return nil
+	}
+	err = df.Sync()
+	closeErr := df.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 
 // loadResume reads and validates a state file. Returns nil state with

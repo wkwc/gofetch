@@ -3,6 +3,7 @@ package fetch
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -236,5 +237,29 @@ func TestAllocateFileWriterRejectsSymlink(t *testing.T) {
 	}
 	if _, err := allocateFileWriter(regular, 1024, false, false); err != nil {
 		t.Errorf("regular file rejected: %v", err)
+	}
+}
+
+func TestOpenOutputFileRejectsFinalSymlink(t *testing.T) {
+	switch runtime.GOOS {
+	case "linux", "darwin", "freebsd", "openbsd", "netbsd", "dragonfly":
+	default:
+		t.Skip("platform does not expose O_NOFOLLOW through the standard library")
+	}
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("preserve"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "output")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	if _, err := openOutputFile(link, os.O_RDWR|os.O_TRUNC, 0o644); err == nil {
+		t.Fatal("expected O_NOFOLLOW to reject final symlink")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "preserve" {
+		t.Errorf("symlink target changed: %q, err=%v", got, err)
 	}
 }
