@@ -143,13 +143,17 @@ func DialContextAuto(ctx context.Context, network, addr string) (net.Conn, error
 }
 
 var (
-	proxyHostsOnce sync.Once
-	proxyHosts     map[string]struct{}
+	// proxyMu guards proxyInit/proxyHosts: allowProxyHost may run while
+	// dial goroutines of another downloader read envProxyHost.
+	proxyMu    sync.RWMutex
+	proxyInit  bool
+	proxyHosts map[string]struct{}
 )
 
-// loadEnvProxyHosts populates the trusted-proxy set from the environment.
-func loadEnvProxyHosts() {
-	proxyHosts = make(map[string]struct{})
+// loadEnvProxyHostsLocked populates the trusted-proxy set from the
+// environment. Caller must hold proxyMu (write lock).
+func loadEnvProxyHostsLocked() {
+	hosts := make(map[string]struct{})
 	for _, key := range []string{
 		"HTTP_PROXY", "http_proxy",
 		"HTTPS_PROXY", "https_proxy",
@@ -168,9 +172,11 @@ func loadEnvProxyHosts() {
 			continue
 		}
 		if h := strings.ToLower(u.Hostname()); h != "" {
-			proxyHosts[h] = struct{}{}
+			hosts[h] = struct{}{}
 		}
 	}
+	proxyHosts = hosts
+	proxyInit = true
 }
 
 // allowProxyHost registers an explicit --proxy host as a trusted
@@ -181,7 +187,11 @@ func allowProxyHost(host string) {
 	if host == "" {
 		return
 	}
-	proxyHostsOnce.Do(loadEnvProxyHosts)
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	if !proxyInit {
+		loadEnvProxyHostsLocked()
+	}
 	proxyHosts[strings.ToLower(host)] = struct{}{}
 }
 
@@ -193,7 +203,11 @@ func envProxyHost(hostport string) bool {
 		host = hostport
 	}
 	host = strings.ToLower(host)
-	proxyHostsOnce.Do(loadEnvProxyHosts)
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	if !proxyInit {
+		loadEnvProxyHostsLocked()
+	}
 	_, ok := proxyHosts[host]
 	return ok
 }

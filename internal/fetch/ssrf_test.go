@@ -78,7 +78,9 @@ func TestIpIsBlocked(t *testing.T) {
 // resetProxyHosts empties the global proxy allowlist so tests that call
 // allowProxyHost do not leak entries into later runs (e.g. -count=N).
 func resetProxyHosts() {
-	proxyHostsOnce.Do(loadEnvProxyHosts)
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
+	proxyInit = true
 	proxyHosts = map[string]struct{}{}
 }
 
