@@ -199,6 +199,13 @@ MD5 and SHA-1 are supported for **integrity verification** of third-party
 dataset files (the algorithms those publishers ship); they are not
 collision-resistant, so prefer sha256/sha512 when tamper resistance matters.
 
+A remotely auto-discovered checksum (`-h auto` fetching `URL.sha256` and
+friends) protects against accidental corruption, but it does **not** establish
+provenance if the download host and checksum host are both compromised — the
+attacker simply publishes a matching checksum for tampered bytes. For
+authenticity-sensitive downloads, require a hash pinned from an independent
+source, a signature, or a build attestation instead of trusting auto-discovery.
+
 `-h auto` (and the zero-config default) also understands **container
 checksum files** — `sha256sums.txt` (Arch) / `SHA256SUMS` (Ubuntu, Debian) —
 both next to the local output and on the remote mirror, matching the entry
