@@ -33,7 +33,7 @@ bench_build() {
 }
 
 bench_wait_for_server() {
-  for i in {1..30}; do
+  for _ in {1..30}; do
     if curl -s -o /dev/null -w "%{http_code}" "${URL}" 2>/dev/null | grep -q 200; then
       return 0
     fi

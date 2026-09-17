@@ -31,7 +31,7 @@ run_to() {
 # t_retry LABEL TIMEOUT CMD... : up to 2 attempts (real servers flake).
 t_retry() {
   local label=$1 to=$2; shift 2
-  for attempt in 1 2; do
+  for _ in 1 2; do
     if timeout "$to" "$@" >/dev/null 2>&1; then ok "$label"; return; fi
   done
   bad "$label"
@@ -128,7 +128,7 @@ if reachable "$PROOF/100Mb.dat"; then
   # for flaky upstreams; skip (not fail) if the network cannot sustain a
   # partial download — the resume machinery is proven locally.
   PARTIAL=0
-  for attempt in 1 2; do
+  for _ in 1 2; do
     "$GOFETCH" -q --limit-rate 10M -o "$TMP/big.bin" "$PROOF/100Mb.dat" >/dev/null 2>&1 &
     PID=$!
     for _ in $(seq 1 180); do
