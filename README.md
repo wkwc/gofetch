@@ -139,7 +139,7 @@ but "parallel curl."
 1. **Sparse file + `WriteAt`.** The target file is `Truncate`d to its full size up front,
    and every worker writes its bytes directly to the final offsets. No temp files, no merge.
 2. **Adaptive work stealing.** A monitor goroutine ticks every 500 ms. If a worker is
-   "slow" (on a chunk > 512 KiB and has fetched < 1 MiB after a 1.5 s grace period),
+   "slow" (on a chunk ≥ 512 KiB and has fetched < 1 MiB after a 1.5 s grace period),
    the monitor *cancels* that worker's HTTP request, splits its remaining range,
    and pushes the unfinished half back to the shared work queue for another worker to grab.
 3. **Lock-free progress.** There is no shared `done` counter — the progress

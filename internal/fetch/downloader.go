@@ -257,55 +257,71 @@ func (d *Downloader) Download(ctx context.Context) error {
 		if i > 0 {
 			d.vlog("mirror %d/%d failed (%v), trying mirror %d/%d: %s",
 				i, len(urls), lastErr, i+1, len(urls), activeURL)
-			// Reset retry counters when failing over to a fresh mirror:
-			// the per-range budget should not be shared across mirrors
-			// (a range that exhausted retries against mirror 1 deserves
-			// a full retry budget against the next probed mirror).
-			d.retryMu.Lock()
-			d.retryCount = nil
-			d.retryMu.Unlock()
+			d.resetRetryBudget()
 		}
-		d.startTime = time.Now()
-
-		info, err := d.probeURL(ctx, activeURL)
+		stop, err := d.tryMirror(ctx, activeURL, i)
+		if stop {
+			return err
+		}
 		if err != nil {
-			lastErr = fmt.Errorf("mirror %d (%s) probe: %w", i+1, activeURL, err)
-			continue
+			lastErr = err
 		}
+	}
+	return lastErr
+}
 
-		// applyProbe commits size + auto-tune and wipes progress if the
-		// probe proves a different size than a prior mirror (cannot reuse bytes).
-		d.applyProbe(info)
+// resetRetryBudget clears per-range retry counters when failing over to a
+// fresh mirror: the per-range budget must not be shared across mirrors
+// (a range that exhausted retries against mirror 1 deserves a full retry
+// budget against the next probed mirror).
+func (d *Downloader) resetRetryBudget() {
+	d.retryMu.Lock()
+	d.retryCount = nil
+	d.retryMu.Unlock()
+}
 
-		// completed holds ranges to skip: from a matching on-disk sidecar,
-		// or in-memory progress carried over from a failed mirror.
-		completed := d.resolveResume(activeURL, info.total)
+// tryMirror attempts a single URL (primary or mirror). It reports
+// (true, nil) when the download completed, (true, err) when the whole
+// operation must stop (user cancel), and (false, err) to fail over to
+// the next mirror with err recorded. idx is the 0-based mirror index,
+// used only for error context.
+func (d *Downloader) tryMirror(ctx context.Context, activeURL string, idx int) (stop bool, err error) {
+	n := idx + 1
+	d.startTime = time.Now()
 
-		f, err := allocateFileWriter(d.outFile, info.total, d.resumeEnabled, d.noMmap)
-		if err != nil {
-			lastErr = fmt.Errorf("mirror %d (%s) file setup: %w", i+1, activeURL, err)
-			continue
-		}
+	info, err := d.probeURL(ctx, activeURL)
+	if err != nil {
+		return false, fmt.Errorf("mirror %d (%s) probe: %w", n, activeURL, err)
+	}
 
-		// Each mirror iteration opens a fresh file writer. Close it
-		// explicitly before the next attempt instead of using defer,
-		// which would leak file descriptors for earlier mirrors until
-		// the entire function returns.
-		err = d.downloadFromMirror(ctx, activeURL, info, completed, f)
-		if err == nil {
-			// Single ownership of Sync/Close/hash: leaves never finalize.
-			return d.finalize(f, nil)
-		}
+	// applyProbe commits size + auto-tune and wipes progress if the
+	// probe proves a different size than a prior mirror (cannot reuse bytes).
+	d.applyProbe(info)
+
+	// completed holds ranges to skip: from a matching on-disk sidecar,
+	// or in-memory progress carried over from a failed mirror.
+	completed := d.resolveResume(activeURL, info.total)
+
+	f, err := allocateFileWriter(d.outFile, info.total, d.resumeEnabled, d.noMmap)
+	if err != nil {
+		return false, fmt.Errorf("mirror %d (%s) file setup: %w", n, activeURL, err)
+	}
+
+	// Each mirror iteration opens a fresh file writer. Close it
+	// explicitly before the next attempt instead of using defer,
+	// which would leak file descriptors for earlier mirrors until
+	// the entire function returns.
+	if merr := d.downloadFromMirror(ctx, activeURL, info, completed, f); merr != nil {
 		_ = f.Close()
-		lastErr = fmt.Errorf("mirror %d (%s) failed: %w", i+1, activeURL, err)
+		wrapped := fmt.Errorf("mirror %d (%s) failed: %w", n, activeURL, merr)
 		// User-initiated cancel (Ctrl-C / timeout): the cancel path in
 		// range.go already flushed a durable sidecar via maybeSaveResume(true).
 		// Do NOT clear it, do NOT fail over to the next mirror, and do NOT
 		// delete the partial output — the user asked to stop, not to retry.
 		// Returning here leaves the resume sidecar intact so the next
 		// invocation resumes from the flushed progress.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return lastErr
+		if errors.Is(merr, context.Canceled) || errors.Is(merr, context.DeadlineExceeded) {
+			return true, wrapped
 		}
 		// Keep on-disk bytes + completed ranges until the *next* iteration
 		// successfully probes and proves a size mismatch. Pre-probing the
@@ -313,19 +329,21 @@ func (d *Downloader) Download(ctx context.Context) error {
 		// probe failure. Wipe only when we know we will not keep progress.
 		if !d.resumeEnabled {
 			_ = os.Remove(d.outFile)
-			continue
+			return false, wrapped
 		}
 		// Clear URL-keyed resume sidecar; in-memory completed survives
 		// for same-size failover. Size mismatch is handled after the
-		// next successful probe (below, at loop top via applyProbe).
+		// next successful probe (at loop top via applyProbe).
 		// NOTE: a genuine same-size mirror MUST NOT reuse completed
 		// ranges across a *different host* — resolveResume gates reuse
 		// on a per-chunk manifest that can vouch for the bytes.
 		_ = clearResume(d.resumePath)
 		d.vlog("mirror failed; keeping %d completed ranges pending next probe",
 			len(d.snapshotCompleted()))
+		return false, wrapped
 	}
-	return lastErr
+	// Single ownership of Sync/Close/hash: leaves never finalize.
+	return true, d.finalize(f, nil)
 }
 
 // applyProbe records probe results: re-tunes auto-config and wipes
