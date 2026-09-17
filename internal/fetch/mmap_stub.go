@@ -2,16 +2,16 @@
 
 package fetch
 
-import "fmt"
+import "errors"
 
 // mmapSys is unsupported on this platform.
 func mmapSys(_ uintptr, _ int) ([]byte, error) {
-	return nil, fmt.Errorf("mmap not supported on this platform")
+	return nil, errors.New("mmap not supported on this platform")
 }
 
 // munmapSys is unsupported on this platform.
 func munmapSys(_ []byte) error {
-	return fmt.Errorf("munmap not supported on this platform")
+	return errors.New("munmap not supported on this platform")
 }
 
 // hintSequential is a no-op on non-Linux platforms.

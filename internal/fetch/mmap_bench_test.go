@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ import (
 // incurs uniquely.
 func BenchmarkMmapSingle(b *testing.B) {
 	tmp := b.TempDir()
-	path := tmp + "/mmap.bench"
+	path := filepath.Join(tmp, "mmap.bench")
 
 	const size int64 = 16 * 1024 * 1024
 	if err := os.WriteFile(path, make([]byte, size), 0o644); err != nil {

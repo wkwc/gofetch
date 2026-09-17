@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,9 +43,11 @@ func main() {
 			return
 		}
 
-		// Parse "bytes=START-END"
-		var start, end int64
-		if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); err != nil {
+		// Parse "bytes=START-END" with strconv (no fmt reflection on the
+		// per-request measurement path — this server's overhead is the
+		// benchmark's noise floor).
+		start, end, ok := parseBenchRange(rangeHeader)
+		if !ok {
 			http.Error(w, "bad range", http.StatusBadRequest)
 			return
 		}
@@ -56,7 +59,7 @@ func main() {
 			return
 		}
 
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+		w.Header().Set("Content-Range", benchRangeHeader(start, end, int64(len(payload))))
 		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 		w.WriteHeader(http.StatusPartialContent)
 
@@ -91,4 +94,36 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// parseBenchRange parses "bytes=START-END" without fmt.Sscanf reflection.
+func parseBenchRange(h string) (start, end int64, ok bool) {
+	const p = "bytes="
+	if !strings.HasPrefix(h, p) {
+		return 0, 0, false
+	}
+	rest := h[len(p):]
+	dash := strings.IndexByte(rest, '-')
+	if dash < 1 || dash >= len(rest)-1 {
+		return 0, 0, false
+	}
+	s, err1 := strconv.ParseInt(rest[:dash], 10, 64)
+	e, err2 := strconv.ParseInt(rest[dash+1:], 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return s, e, true
+}
+
+// benchRangeHeader builds a "bytes START-END/TOTAL" header with AppendInt.
+func benchRangeHeader(start, end, total int64) string {
+	var b [64]byte
+	buf := b[:0]
+	buf = append(buf, "bytes "...)
+	buf = strconv.AppendInt(buf, start, 10)
+	buf = append(buf, '-')
+	buf = strconv.AppendInt(buf, end, 10)
+	buf = append(buf, '/')
+	buf = strconv.AppendInt(buf, total, 10)
+	return string(buf)
 }
