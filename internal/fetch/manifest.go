@@ -1,12 +1,13 @@
 package fetch
 
 import (
+	"cmp"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -157,16 +158,10 @@ func (m *Manifest) VerifyRange(start, end int64, data []byte) error {
 	}
 	m.buildIndex()
 	chunks := m.Chunks
-	// Find first chunk with Start >= start. sort.Search semantics.
-	lo, hi := 0, len(chunks)
-	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
-		if chunks[mid].Start < start {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
+	// First chunk with Start >= start via stdlib binary search.
+	lo, _ := slices.BinarySearchFunc(chunks, start, func(c ChunkHash, want int64) int {
+		return cmp.Compare(c.Start, want)
+	})
 	for i := lo; i < len(chunks); i++ {
 		c := chunks[i]
 		if c.Start > end {
@@ -300,8 +295,8 @@ func (m *Manifest) buildIndex() {
 		if sortBefore {
 			// In-place stable sort by Start; preserves relative order of
 			// equal-Start chunks (which the index dedups by End anyway).
-			sort.SliceStable(m.Chunks, func(i, j int) bool {
-				return m.Chunks[i].Start < m.Chunks[j].Start
+			slices.SortStableFunc(m.Chunks, func(a, b ChunkHash) int {
+				return cmp.Compare(a.Start, b.Start)
 			})
 		}
 		m.index = make(map[int64]ChunkHash, len(m.Chunks))

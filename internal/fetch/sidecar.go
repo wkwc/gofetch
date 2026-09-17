@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,12 +92,12 @@ func fetchSidecarContent(ctx context.Context, client *http.Client, sidecarURL st
 	// SSRF protection: reject private/internal IPs (scheme checked by the
 	// caller via URL construction or an explicit -h URL).
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("sidecar URL must use http or https")
+		return "", errors.New("sidecar URL must use http or https")
 	}
 	if HostIsPrivateContext(ctx, parsed.Hostname()) {
 		return "", fmt.Errorf("sidecar URL host %q resolves to a private/internal address (SSRF guard)", parsed.Hostname())
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sidecarURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sidecarURL, http.NoBody)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}

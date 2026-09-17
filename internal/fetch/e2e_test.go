@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -146,7 +147,7 @@ func TestProbeRetriesTransientStatus(t *testing.T) {
 			return
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -272,8 +273,8 @@ func TestShortRangeBodyErrors(t *testing.T) {
 	// Promise the full range but write only half, then close.
 	srv := newRangeServer(t, payload, &rangeServerConfig{
 		Write: func(w http.ResponseWriter, _ *http.Request, payload []byte, _, _ int64) {
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(payload)-1, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)/2))
+			w.Header().Set("Content-Range", contentRange(0, int64(len(payload)-1), len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)/2))
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = w.Write(payload[:len(payload)/2])
 		},
@@ -317,8 +318,8 @@ func TestMidRangeEOFRetriesRecovery(t *testing.T) {
 			// exactly a CDN closing mid-stream. The second attempt serves
 			// the full range. Truncating every attempt (TestShortRangeBodyErrors)
 			// only exercises the retry-budget exhaustion path.
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			if n == 1 {
 				_, _ = w.Write(payload[start : firstHalf(start, end)+1])
@@ -355,7 +356,7 @@ func TestRange200FallsBackToSingle(t *testing.T) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		if r.Method == http.MethodHead {
 			w.Header().Set("Accept-Ranges", "bytes")
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -365,7 +366,7 @@ func TestRange200FallsBackToSingle(t *testing.T) {
 		} else {
 			fullHits.Add(1)
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -439,8 +440,8 @@ func TestRateLimitedNoThrash(t *testing.T) {
 			mu.Lock()
 			reqs[fmt.Sprintf("%d-%d", start, end)]++
 			mu.Unlock()
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			const block = 16 * 1024
 			for cur := start; cur <= end; cur += block {
@@ -529,10 +530,12 @@ func TestWorkersBufOverride(t *testing.T) {
 	}
 }
 
-// manifestFromPayload builds a sha256 manifest over data in chunkSize
-// chunks. corruptChunk >= 0 replaces that chunk's hash with a wrong value.
-func manifestFromPayload(t *testing.T, data []byte, chunkSize int64, corruptChunk int) *Manifest {
+// manifestFromPayload builds a sha256 manifest over data in minSeedChunk
+// (1 MiB) pieces — the same chunk size production seeds. corruptChunk >= 0
+// replaces that chunk's hash with a wrong value.
+func manifestFromPayload(t *testing.T, data []byte, corruptChunk int) *Manifest {
 	t.Helper()
+	const chunkSize = minSeedChunk
 	m := &Manifest{Version: ManifestVersion, Algo: "sha256"}
 	idx := 0
 	for start := int64(0); start < int64(len(data)); start += chunkSize {
@@ -559,7 +562,7 @@ func TestEndToEndManifestVerification(t *testing.T) {
 	payload := makePayload(2 * 1024 * 1024) // two 1 MiB chunks
 	srv := newRangeServer(t, payload, nil)
 	outFile := filepath.Join(t.TempDir(), "out.bin")
-	if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, -1)); err != nil {
+	if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, -1)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -583,7 +586,7 @@ func TestEndToEndManifestCorruptChunkFails(t *testing.T) {
 	payload := makePayload(2 * 1024 * 1024)
 	srv := newRangeServer(t, payload, nil)
 	outFile := filepath.Join(t.TempDir(), "out.bin")
-	if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, 1)); err != nil {
+	if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -612,13 +615,13 @@ func newChaosServer(t *testing.T, payload []byte, rng *rand.Rand) *httptest.Serv
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Accept-Ranges", "bytes")
 		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 		rh := r.Header.Get("Range")
 		if rh == "" {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 			return
@@ -633,18 +636,18 @@ func newChaosServer(t *testing.T, payload []byte, rng *rand.Rand) *httptest.Serv
 		mu.Unlock()
 		switch {
 		case roll < 70: // serve correctly
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = w.Write(payload[start : end+1])
 		case roll < 80: // promise full range, write half, then close
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			half := start + (end-start+1)/2
 			_, _ = w.Write(payload[start : half+1])
 		case roll < 85: // abrupt connection reset after headers
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
 			w.WriteHeader(http.StatusPartialContent)
 			if hj, ok := w.(http.Hijacker); ok {
 				conn, _, err := hj.Hijack()
@@ -656,13 +659,13 @@ func newChaosServer(t *testing.T, payload []byte, rng *rand.Rand) *httptest.Serv
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "busy", http.StatusServiceUnavailable)
 		case roll < 95: // wrong Content-Range → hard task error
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start+1, end+1, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.Header().Set("Content-Range", contentRange(start+1, end+1, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = w.Write(payload[start : end+1])
 		default: // wrong Content-Length vs body → short read
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", (end-start+1)/2))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt((end-start+1)/2, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = w.Write(payload[start : end+1])
 		}
@@ -706,12 +709,12 @@ func TestChaosServerHardFailClean(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Accept-Ranges", "bytes")
 		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 		if r.Header.Get("Range") == "" {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 			return
@@ -749,11 +752,11 @@ func TestHTTPSDownloadWithCACert(t *testing.T) {
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -861,7 +864,7 @@ func TestHTTPSResumeOverHTTP2(t *testing.T) {
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -871,13 +874,13 @@ func TestHTTPSResumeOverHTTP2(t *testing.T) {
 			if end >= int64(len(payload)) {
 				end = int64(len(payload)) - 1
 			}
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = w.Write(payload[start : end+1])
 			return
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -925,7 +928,7 @@ func TestEndToEndManifestNoMmap(t *testing.T) {
 
 	t.Run("valid", func(t *testing.T) {
 		outFile := filepath.Join(t.TempDir(), "out.bin")
-		if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, -1)); err != nil {
+		if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, -1)); err != nil {
 			t.Fatal(err)
 		}
 		d := NewDownloader(srv.URL, outFile, Options{NoMmap: true, NoResume: true, Quiet: true})
@@ -943,7 +946,7 @@ func TestEndToEndManifestNoMmap(t *testing.T) {
 
 	t.Run("corrupt chunk aborts", func(t *testing.T) {
 		outFile := filepath.Join(t.TempDir(), "out.bin")
-		if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1<<20, 1)); err != nil {
+		if err := WriteManifest(outFile+".gofetch.manifest", manifestFromPayload(t, payload, 1)); err != nil {
 			t.Fatal(err)
 		}
 		d := NewDownloader(srv.URL, outFile, Options{NoMmap: true, NoResume: true, Quiet: true})

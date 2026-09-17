@@ -8,16 +8,15 @@ import (
 
 // newResumeTestDownloader builds a Downloader wired to a temp output file
 // with resume enabled, for exercising resolveResume in isolation.
-func newResumeTestDownloader(t *testing.T) (*Downloader, string) {
+func newResumeTestDownloader(t *testing.T) *Downloader {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "f.bin")
-	d := NewDownloader("https://primary.example/f.bin", out, Options{})
-	return d, out
+	return NewDownloader("https://primary.example/f.bin", out, Options{})
 }
 
 // TestResolveResumeDisabled verifies --no-resume never seeds ranges.
 func TestResolveResumeDisabled(t *testing.T) {
-	d, _ := newResumeTestDownloader(t)
+	d := newResumeTestDownloader(t)
 	d.resumeEnabled = false
 	d.resumePath = ""
 	d.recordCompleted(Task{Start: 0, End: 99})
@@ -30,7 +29,7 @@ func TestResolveResumeDisabled(t *testing.T) {
 // sidecar restores completed ranges, promotes in-progress bytes, and
 // inherits the persisted hash algo+value.
 func TestResolveResumeSidecarRecovery(t *testing.T) {
-	d, _ := newResumeTestDownloader(t)
+	d := newResumeTestDownloader(t)
 
 	ws := newWorkerState()
 	ws.reset(Task{Start: 100, End: 199})
@@ -65,7 +64,7 @@ func TestResolveResumeSidecarRecovery(t *testing.T) {
 // explicit -h value restores the algorithm across a process restart, so
 // a sha512 download never verifies with the wrong (or no) algorithm.
 func TestResolveResumeInheritsHash(t *testing.T) {
-	d, _ := newResumeTestDownloader(t)
+	d := newResumeTestDownloader(t)
 
 	d.totalSize = 1000
 	d.hashAlgo = "sha512"
@@ -88,7 +87,7 @@ func TestResolveResumeInheritsHash(t *testing.T) {
 // the prior mirror (two same-size mirrors may serve different bytes),
 // while a manifest vouching for the bytes permits reuse.
 func TestResolveResumeCrossMirrorSplicing(t *testing.T) {
-	d, _ := newResumeTestDownloader(t)
+	d := newResumeTestDownloader(t)
 	d.totalSize = 1000
 	d.recordCompleted(Task{Start: 0, End: 99})
 	d.seedCompleted(d.snapshotCompleted())
@@ -116,7 +115,7 @@ func TestResolveResumeCrossMirrorSplicing(t *testing.T) {
 // cleared (not retried forever) while in-memory progress from a
 // same-size failover survives.
 func TestResolveResumeCorruptSidecar(t *testing.T) {
-	d, _ := newResumeTestDownloader(t)
+	d := newResumeTestDownloader(t)
 	d.totalSize = 1000
 	d.recordCompleted(Task{Start: 0, End: 99})
 	d.seedCompleted(d.snapshotCompleted())

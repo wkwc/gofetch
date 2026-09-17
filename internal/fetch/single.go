@@ -22,7 +22,7 @@ func (d *Downloader) singleDownload(ctx context.Context, url string, total int64
 		return err
 	}
 
-	resp, err := d.client.Do(req)
+	resp, err := d.client.Do(req) //nolint:bodyclose // closed via the idle wrapper below.
 	if err != nil {
 		return err
 	}

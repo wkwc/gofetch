@@ -163,29 +163,29 @@ func TestValidateHexHash(t *testing.T) {
 // infer identical results.
 func TestAlgoInferenceConsistency(t *testing.T) {
 	for _, algo := range []string{algoMD5, algoSHA1, algoSHA256, algoSHA512} {
-		hex := strings.Repeat("a", hashSize(algo)*2)
+		hexStr := strings.Repeat("a", hashSize(algo)*2)
 
-		got, ok := algoForLen(hex)
+		got, ok := algoForLen(hexStr)
 		if !ok || got != algo {
-			t.Errorf("algoForLen(%d) = %s/%v, want %s", len(hex), got, ok, algo)
+			t.Errorf("algoForLen(%d) = %s/%v, want %s", len(hexStr), got, ok, algo)
 		}
 
-		a1, h1, err := ParseHashFlag(hex)
-		if err != nil || a1 != algo || h1 != hex {
+		a1, h1, err := ParseHashFlag(hexStr)
+		if err != nil || a1 != algo || h1 != hexStr {
 			t.Errorf("ParseHashFlag(bare %s) = %s/%s/%v", algo, a1, h1, err)
 		}
 
-		a2, _, err := ParseHashFlag(algo + ":" + hex)
+		a2, _, err := ParseHashFlag(algo + ":" + hexStr)
 		if err != nil || a2 != algo {
 			t.Errorf("ParseHashFlag(%s:hex) = %s/%v", algo, a2, err)
 		}
 
-		a3, h3, err := ParseSidecarContent(hex+"  f.bin\n", "f")
-		if err != nil || a3 != algo || h3 != hex {
+		a3, h3, err := ParseSidecarContent(hexStr+"  f.bin\n", "f")
+		if err != nil || a3 != algo || h3 != hexStr {
 			t.Errorf("ParseSidecarContent(%s) = %s/%s/%v", algo, a3, h3, err)
 		}
 
-		if len(hex) != hashSize(algo)*2 {
+		if len(hexStr) != hashSize(algo)*2 {
 			t.Errorf("hashSize(%s) length mismatch", algo)
 		}
 	}

@@ -1,13 +1,17 @@
 package fetch
 
-import "sort"
+import (
+	"cmp"
+	"math"
+	"slices"
+)
 
 // sortedByStart returns a copy of tasks sorted ascending by Start.
 // Shared by uncompleted and dedupTasks so both walk ranges in order.
 func sortedByStart(tasks []Task) []Task {
 	sorted := make([]Task, len(tasks))
 	copy(sorted, tasks)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+	slices.SortFunc(sorted, func(a, b Task) int { return cmp.Compare(a.Start, b.Start) })
 	return sorted
 }
 
@@ -63,7 +67,7 @@ func splitRange(offset, length, chunkSize int64) []Task {
 	end, overflow := addSat(offset, length)
 	if overflow {
 		// Treat as "very large" file; cap at int64 max
-		end = int64(^uint64(0) >> 1)
+		end = math.MaxInt64
 	}
 	// n = ceil(length / chunkSize), saturating to avoid int64 overflow
 	// panic in `make` for server-controlled values near MaxInt64.
@@ -108,8 +112,8 @@ func splitRange(offset, length, chunkSize int64) []Task {
 // (splitRange returns early when length<=0), so only positive overflow is
 // possible; the saturating value is math.MaxInt64.
 func addSat(x, y int64) (int64, bool) {
-	if y > 0 && x > int64(^uint64(0)>>1)-y {
-		return int64(^uint64(0) >> 1), true
+	if y > 0 && x > math.MaxInt64-y {
+		return math.MaxInt64, true
 	}
 	return x + y, false
 }

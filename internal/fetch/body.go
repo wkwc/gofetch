@@ -37,14 +37,25 @@ func mmapBytes(f fileWriter) []byte {
 //
 // Zero-copy fast path: when the writer exposes an mmap slice, reads go
 // straight into it and no pooled buffer is acquired.
-func (d *Downloader) pumpBody(ctx context.Context, body io.Reader, f fileWriter, ws *workerState, start, end int64, strict bool) (int64, error) {
+func (d *Downloader) pumpBody(
+	ctx context.Context, body io.Reader, f fileWriter, ws *workerState, start, end int64, strict bool,
+) (int64, error) {
 	direct := mmapBytes(f)
 	if end >= 0 && direct != nil && end+1 > int64(len(direct)) {
 		return 0, fmt.Errorf("mmap slice short: end=%d len=%d", end, len(direct))
 	}
-	manifest := d.manifest
+	// NOTE: no per-buffer manifest check here. Pump buffers (64-256 KiB
+	// reads) almost never align to whole 1 MiB manifest chunks, so a
+	// per-read VerifyChunk was dead weight on the hot path. Integrity
+	// is enforced post-task by verifyTaskRange (VerifyRange, O(log M+k))
+	// and at finalize by VerifyFull.
 	bufCap := int64(d.autoConfig.BufSize)
 	cursor := start
+	// Hoisted loop invariants: rateLimit is fixed at construction and
+	// never mutated mid-download, so check nil once instead of paying
+	// a non-inlinable method call per buffer when unthrottled (the
+	// common case: ~1 call per 64-256 KiB).
+	rl := d.rateLimit
 	var buf []byte
 	if direct == nil {
 		buf = acquireBuf(d.autoConfig.BufSize)
@@ -78,7 +89,9 @@ func (d *Downloader) pumpBody(ctx context.Context, body io.Reader, f fileWriter,
 		}
 		n, rerr := body.Read(dest)
 		if n > 0 {
-			d.rateLimit.wait(ctx, n)
+			if rl != nil {
+				rl.wait(ctx, n)
+			}
 			if direct == nil && end >= 0 {
 				if remaining := end - cursor + 1; int64(n) > remaining {
 					n = int(remaining)
@@ -92,11 +105,6 @@ func (d *Downloader) pumpBody(ctx context.Context, body io.Reader, f fileWriter,
 			cursor += int64(n)
 			if ws != nil {
 				ws.bytesDone.Store(cursor - start)
-			}
-			if manifest != nil {
-				if err := manifest.VerifyChunk(cursor-int64(n), cursor-1, dest[:n]); err != nil {
-					return cursor - start, err
-				}
 			}
 		}
 		if rerr != nil {

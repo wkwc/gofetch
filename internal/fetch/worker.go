@@ -260,8 +260,16 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 
 	d.vlog("task %d-%d started", task.Start, task.End)
 
-	// Pre-compute Range header once per task (avoids per-attempt allocations).
-	rangeHeader := "bytes=" + strconv.FormatInt(task.Start, 10) + "-" + strconv.FormatInt(task.End, 10)
+	// Pre-compute Range header once per task with a stack buffer and
+	// AppendInt (1 alloc for the final string vs 3 for "+"
+	// concatenation of intermediate strings).
+	var rhBuf [64]byte
+	rh := rhBuf[:0]
+	rh = append(rh, "bytes="...)
+	rh = strconv.AppendInt(rh, task.Start, 10)
+	rh = append(rh, '-')
+	rh = strconv.AppendInt(rh, task.End, 10)
+	rangeHeader := string(rh)
 
 	var lastErr error
 	for attempt := 0; attempt <= d.autoConfig.RetryMax; attempt++ {
@@ -270,7 +278,7 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 			return err
 		}
 
-		resp, err := d.client.Do(req)
+		resp, err := d.client.Do(req) //nolint:bodyclose // closed on every path: drainAndClose or readBody.
 		if err != nil {
 			return err
 		}
@@ -330,9 +338,11 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 		return d.readBody(rctx, task, f, ws, resp.Body)
 	}
 	if lastErr != nil {
-		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)", task.Start, task.End, d.autoConfig.RetryMax, lastErr)
+		return fmt.Errorf("range %d-%d: exhausted %d retries on retryable HTTP status (%v)",
+			task.Start, task.End, d.autoConfig.RetryMax, lastErr)
 	}
-	return fmt.Errorf("range %d-%d: exhausted retries on retryable HTTP status with no last error (invariant violation)", task.Start, task.End)
+	return fmt.Errorf("range %d-%d: exhausted retries on retryable HTTP status with no last error (invariant violation)",
+		task.Start, task.End)
 }
 
 // sleepCtx sleeps for d, returning false if ctx is cancelled first.

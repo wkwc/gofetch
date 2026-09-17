@@ -7,13 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,12 +45,12 @@ func TestAutoDetectLocalSidecar(t *testing.T) {
 
 	t.Run("no sidecar", func(t *testing.T) {
 		out := filepath.Join(dir, "none.bin")
-		algo, hex, err := autoDetectLocalSidecar(out)
+		algo, hexHash, err := autoDetectLocalSidecar(out)
 		if err != nil {
 			t.Fatalf("err = %v, want nil", err)
 		}
-		if algo != "" || hex != "" {
-			t.Errorf("algo=%q hex=%q, want empty", algo, hex)
+		if algo != "" || hexHash != "" {
+			t.Errorf("algo=%q hex=%q, want empty", algo, hexHash)
 		}
 	})
 
@@ -60,12 +60,12 @@ func TestAutoDetectLocalSidecar(t *testing.T) {
 		if err := os.WriteFile(out+".sha256", []byte(hash+"  data.bin\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		algo, hex, err := autoDetectLocalSidecar(out)
+		algo, hexHash, err := autoDetectLocalSidecar(out)
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		if algo != "sha256" || hex != hash {
-			t.Errorf("algo=%q hex=%q, want sha256/%q", algo, hex, hash)
+		if algo != "sha256" || hexHash != hash {
+			t.Errorf("algo=%q hex=%q, want sha256/%q", algo, hexHash, hash)
 		}
 	})
 
@@ -75,12 +75,12 @@ func TestAutoDetectLocalSidecar(t *testing.T) {
 		if err := os.WriteFile(out+".sha512sum", []byte(hash+"  big.bin\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		algo, hex, err := autoDetectLocalSidecar(out)
+		algo, hexHash, err := autoDetectLocalSidecar(out)
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		if algo != "sha512" || hex != hash {
-			t.Errorf("algo=%q hex=%q, want sha512/%q", algo, hex, hash)
+		if algo != "sha512" || hexHash != hash {
+			t.Errorf("algo=%q hex=%q, want sha512/%q", algo, hexHash, hash)
 		}
 	})
 
@@ -88,13 +88,13 @@ func TestAutoDetectLocalSidecar(t *testing.T) {
 		// "-h" defaults to "" and must pick up the sidecar next to the
 		// output with zero configuration.
 		out := filepath.Join(dir, "data.bin") // sha256 sidecar created above
-		algo, hex, err := resolveHash(t.Context(), "", "https://example.com/data.bin", out)
+		algo, hexHash, err := resolveHash(t.Context(), "", "https://example.com/data.bin", out)
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
 		want := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
-		if algo != "sha256" || hex != want {
-			t.Errorf("algo=%q hex=%q, want sha256/%q", algo, hex, want)
+		if algo != "sha256" || hexHash != want {
+			t.Errorf("algo=%q hex=%q, want sha256/%q", algo, hexHash, want)
 		}
 	})
 
@@ -102,12 +102,12 @@ func TestAutoDetectLocalSidecar(t *testing.T) {
 		// resolveHash with an explicit -h value must not touch the sidecar.
 		ctx := t.Context()
 		explicit := "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-		algo, hex, err := resolveHash(ctx, "sha256:"+explicit, "https://example.com/x.bin", filepath.Join(dir, "data.bin"))
+		algo, hexHash, err := resolveHash(ctx, "sha256:"+explicit, "https://example.com/x.bin", filepath.Join(dir, "data.bin"))
 		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		if algo != "sha256" || hex != explicit {
-			t.Errorf("algo=%q hex=%q, want sha256/%q", algo, hex, explicit)
+		if algo != "sha256" || hexHash != explicit {
+			t.Errorf("algo=%q hex=%q, want sha256/%q", algo, hexHash, explicit)
 		}
 	})
 }
@@ -161,6 +161,26 @@ func TestNormalizeMirrors(t *testing.T) {
 	})
 }
 
+// parseTestRange parses "bytes=START-END" for the CLI test server.
+// strconv-based: fmt.Sscanf on a hot per-request path pays reflection.
+func parseTestRange(h string) (start, end int64, ok bool) {
+	const p = "bytes="
+	if !strings.HasPrefix(h, p) {
+		return 0, 0, false
+	}
+	rest := h[len(p):]
+	dash := strings.IndexByte(rest, '-')
+	if dash < 1 || dash >= len(rest)-1 {
+		return 0, 0, false
+	}
+	s, err1 := strconv.ParseInt(rest[:dash], 10, 64)
+	e, err2 := strconv.ParseInt(rest[dash+1:], 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return s, e, true
+}
+
 // newTestServer serves a fixed payload with HEAD + Range support, so the
 // full probe → range-download path is exercised in CLI tests.
 func newTestServer(t *testing.T, payload []byte) *httptest.Server {
@@ -169,19 +189,27 @@ func newTestServer(t *testing.T, payload []byte) *httptest.Server {
 		w.Header().Set("Accept-Ranges", "bytes")
 		w.Header().Set("Content-Type", "application/octet-stream")
 		if r.Method == http.MethodHead {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 		if rh := r.Header.Get("Range"); rh != "" {
-			var start, end int64
-			if _, err := fmt.Sscanf(rh, "bytes=%d-%d", &start, &end); err == nil {
+			start, end, ok := parseTestRange(rh)
+			if ok {
 				if end >= int64(len(payload)) || end < 0 {
 					end = int64(len(payload)) - 1
 				}
 				if start >= 0 && start <= end {
-					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-					w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+					var cr [64]byte
+					cb := cr[:0]
+					cb = append(cb, "bytes "...)
+					cb = strconv.AppendInt(cb, start, 10)
+					cb = append(cb, '-')
+					cb = strconv.AppendInt(cb, end, 10)
+					cb = append(cb, '/')
+					cb = strconv.AppendInt(cb, int64(len(payload)), 10)
+					w.Header().Set("Content-Range", string(cb))
+					w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 					w.WriteHeader(http.StatusPartialContent)
 					_, _ = w.Write(payload[start : end+1])
 					return
@@ -190,7 +218,7 @@ func newTestServer(t *testing.T, payload []byte) *httptest.Server {
 			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -227,7 +255,7 @@ func TestRunDownloadIntoDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(payload) {
+	if !bytes.Equal(got, payload) {
 		t.Errorf("content = %q, want %q", got, payload)
 	}
 }
@@ -474,9 +502,9 @@ func TestRunWorkersInvalid(t *testing.T) {
 func TestRunNoClobber(t *testing.T) {
 	payload := []byte("clobber me")
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -549,7 +577,7 @@ func TestRunMaxRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(payload) {
+	if !bytes.Equal(got, payload) {
 		t.Errorf("content = %q, want %q", got, payload)
 	}
 }
@@ -592,7 +620,7 @@ func TestRunHashAutoRemoteMD5(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/file.bin":
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 		case "/file.bin.md5":
@@ -620,7 +648,7 @@ func TestRunHashAutoRemoteMD5(t *testing.T) {
 	// A wrong remote md5 must fail the download.
 	badSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/file.bin" {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 			return
@@ -640,9 +668,9 @@ func TestRunNoClobberResumesPartial(t *testing.T) {
 	// --no-clobber — it proceeds so the download can resume.
 	payload := []byte("resume me")
 	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -666,7 +694,7 @@ func TestRunNoClobberResumesPartial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(payload) {
+	if !bytes.Equal(got, payload) {
 		t.Errorf("content = %q, want %q", got, payload)
 	}
 }
@@ -674,8 +702,8 @@ func TestRunNoClobberResumesPartial(t *testing.T) {
 func TestRunCACert(t *testing.T) {
 	// A self-signed HTTPS dataset mirror becomes reachable via --ca-cert.
 	payload := bytes.Repeat([]byte("private-mirror-"), 64*1024)
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -713,18 +741,18 @@ func TestRunHashAutoContainer(t *testing.T) {
 	// `-h auto` must fetch it, find the entry for the file, and verify.
 	payload := bytes.Repeat([]byte("iso-data-"), 64*1024)
 	sh := sha256.Sum256(payload)
-	hex := hex.EncodeToString(sh[:])
+	sumHex := hex.EncodeToString(sh[:])
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/distros/latest/file.iso":
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 		case "/distros/latest/SHA256SUMS":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(
 				"0000000000000000000000000000000000000000000000000000000000000000  other-file.iso\n" +
-					hex + "  ./latest/file.iso\n"))
+					sumHex + "  ./latest/file.iso\n"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -754,17 +782,17 @@ func TestAutoDetectLocalSidecarContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "archlinux-x86_64.iso")
-	algo, hex, err := autoDetectLocalSidecar(out)
+	algo, hexHash, err := autoDetectLocalSidecar(out)
 	if err != nil {
 		t.Fatalf("autoDetectLocalSidecar: %v", err)
 	}
-	if algo != "sha256" || hex != hash {
-		t.Errorf("got %s:%s, want sha256:%s", algo, hex, hash)
+	if algo != "sha256" || hexHash != hash {
+		t.Errorf("got %s:%s, want sha256:%s", algo, hexHash, hash)
 	}
 	// A file not listed in the container → no match, no error.
 	other := filepath.Join(dir, "unlisted.iso")
-	if algo, hex, err := autoDetectLocalSidecar(other); err != nil || algo != "" || hex != "" {
-		t.Errorf("unlisted file: algo=%q hex=%q err=%v, want empty", algo, hex, err)
+	if algo, hexHash, err := autoDetectLocalSidecar(other); err != nil || algo != "" || hexHash != "" {
+		t.Errorf("unlisted file: algo=%q hex=%q err=%v, want empty", algo, hexHash, err)
 	}
 }
 
@@ -775,7 +803,7 @@ func TestRunInfoChecksum(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/d/file.iso":
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 		case "/d/sha256sums.txt":
@@ -853,7 +881,7 @@ func TestCLISoakVariedFlags(t *testing.T) {
 	payload := bytes.Repeat([]byte("soakdata-"), 64*1024)
 	srv := newTestServer(t, payload)
 	sh := sha256.Sum256(payload)
-	hex := hex.EncodeToString(sh[:])
+	sumHex := hex.EncodeToString(sh[:])
 	rng := rand.New(rand.NewPCG(1, 2))
 	for i := 0; i < 30; i++ {
 		out := filepath.Join(t.TempDir(), "o.bin")
@@ -872,7 +900,7 @@ func TestCLISoakVariedFlags(t *testing.T) {
 		case 5:
 			args = append(args, "-x", "16", "--buf-size", "256k", "--no-mmap")
 		}
-		args = append(args, "-h", "sha256:"+hex, "-o", out, srv.URL)
+		args = append(args, "-h", "sha256:"+sumHex, "-o", out, srv.URL)
 		if code := run(args); code != 0 {
 			t.Fatalf("iter %d: run %v = %d", i, args, code)
 		}

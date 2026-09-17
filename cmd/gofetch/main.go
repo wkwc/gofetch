@@ -29,7 +29,7 @@ import (
 	"github.com/wkwc/gofetch/internal/fetch"
 )
 
-// version is injected at link time: -ldflags="-X main.version=v1.2.3"
+// version is injected at link time: -ldflags="-X main.version=v1.2.3".
 var version = "dev"
 
 func main() {

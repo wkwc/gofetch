@@ -40,7 +40,7 @@ func TestRateLimiterThroughput(t *testing.T) {
 }
 
 // TestRateLimiterNilSafe verifies the nil receiver is a no-op.
-func TestRateLimiterNilSafe(t *testing.T) {
+func TestRateLimiterNilSafe(_ *testing.T) {
 	var rl *rateLimiter
 	rl.wait(context.Background(), 1024) // must not panic
 }

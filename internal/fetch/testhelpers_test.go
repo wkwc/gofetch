@@ -7,18 +7,21 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
 
-func init() {
+func TestMain(m *testing.M) {
 	// httptest binds 127.0.0.1; production SSRF dial still blocks loopback.
+	// Explicit TestMain (not init) so test setup is ordered and visible.
 	AllowLoopbackDial.Store(true)
+	os.Exit(m.Run())
 }
 
 // makePayload generates n random bytes for test fixtures.
@@ -41,15 +44,23 @@ type rangeServerConfig struct {
 func newRangeServer(t *testing.T, payload []byte, cfg *rangeServerConfig) *httptest.Server {
 	t.Helper()
 	head := func(w http.ResponseWriter, _ *http.Request, payload []byte) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.WriteHeader(http.StatusOK)
 	}
 	if cfg != nil && cfg.Head != nil {
 		head = cfg.Head
 	}
 	write := func(w http.ResponseWriter, r *http.Request, payload []byte, start, end int64) {
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+		var cr [64]byte
+		cb := cr[:0]
+		cb = append(cb, "bytes "...)
+		cb = strconv.AppendInt(cb, start, 10)
+		cb = append(cb, '-')
+		cb = strconv.AppendInt(cb, end, 10)
+		cb = append(cb, '/')
+		cb = strconv.AppendInt(cb, int64(len(payload)), 10)
+		w.Header().Set("Content-Range", string(cb))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 		w.WriteHeader(http.StatusPartialContent)
 		const block = 16 * 1024
 		for cur := start; cur <= end; cur += block {
@@ -76,7 +87,7 @@ func newRangeServer(t *testing.T, payload []byte, cfg *rangeServerConfig) *httpt
 		}
 		rangeHeader := r.Header.Get("Range")
 		if rangeHeader == "" {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 			return
@@ -104,12 +115,37 @@ func sha512Hex(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
+// contentRange builds a "bytes START-END/TOTAL" response header with
+// strconv.AppendInt (no fmt reflection on the per-request test path).
+// Shared by the test servers so the format is defined once (DRY).
+func contentRange(start, end int64, total int) string {
+	var b [64]byte
+	buf := b[:0]
+	buf = append(buf, "bytes "...)
+	buf = strconv.AppendInt(buf, start, 10)
+	buf = append(buf, '-')
+	buf = strconv.AppendInt(buf, end, 10)
+	buf = append(buf, '/')
+	buf = strconv.AppendInt(buf, int64(total), 10)
+	return string(buf)
+}
+
 // parseRangeHeader parses "bytes=START-END" against a payload of the given
 // size, clamping END to size-1. Returns ok=false for malformed or
 // unsatisfiable ranges (START<0 or START>END after clamping).
 func parseRangeHeader(h string, size int) (start, end int64, ok bool) {
-	var s, e int64
-	if _, err := fmt.Sscanf(h, "bytes=%d-%d", &s, &e); err != nil {
+	const p = "bytes="
+	if !strings.HasPrefix(h, p) {
+		return 0, 0, false
+	}
+	rest := h[len(p):]
+	dash := strings.IndexByte(rest, '-')
+	if dash < 1 || dash >= len(rest)-1 {
+		return 0, 0, false
+	}
+	s, err1 := strconv.ParseInt(rest[:dash], 10, 64)
+	e, err2 := strconv.ParseInt(rest[dash+1:], 10, 64)
+	if err1 != nil || err2 != nil {
 		return 0, 0, false
 	}
 	if e >= int64(size) {

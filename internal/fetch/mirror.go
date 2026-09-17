@@ -66,6 +66,7 @@ func (d *Downloader) probeOnce(ctx context.Context, rawURL string) (probeInfo, e
 
 // probeRequest issues a single probe request (HEAD or range GET), drains
 // the body so the connection can be reused, and returns the response.
+// The body is already drained+closed here; callers use only status/headers.
 func (d *Downloader) probeRequest(ctx context.Context, method, rawURL, rangeHeader string) (*http.Response, error) {
 	req, err := d.newRequest(ctx, method, rawURL, rangeHeader)
 	if err != nil {
@@ -80,6 +81,7 @@ func (d *Downloader) probeRequest(ctx context.Context, method, rawURL, rangeHead
 }
 
 func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo, bool, error) {
+	//nolint:bodyclose // probeRequest drains+closes the body; only status/headers are used.
 	resp, err := d.probeRequest(ctx, http.MethodHead, rawURL, "")
 	if err != nil {
 		return probeInfo{}, false, err
@@ -106,6 +108,7 @@ func (d *Downloader) probeHeadURL(ctx context.Context, rawURL string) (probeInfo
 }
 
 func (d *Downloader) probeRangeGetURL(ctx context.Context, rawURL string) (probeInfo, error) {
+	//nolint:bodyclose // probeRequest drains+closes the body; only status/headers are used.
 	resp, err := d.probeRequest(ctx, http.MethodGet, rawURL, "bytes=0-0")
 	if err != nil {
 		return probeInfo{}, err
@@ -206,7 +209,7 @@ const defaultUserAgent = "gofetch/1.0"
 // a proxy-injected or user-set gzip would desync Range offsets and break
 // integrity verification.
 func (d *Downloader) newRequest(ctx context.Context, method, url, rangeHeader string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, http.NoBody)
 	if err != nil {
 		return nil, err
 	}

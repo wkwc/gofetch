@@ -27,10 +27,10 @@ func TestParseSidecarContent(t *testing.T) {
 		},
 		{
 			name:    "sha512 with filename",
-			content: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  out.bin\n",
+			content: strings.Repeat("abcdef0123456789", 8) + "  out.bin\n",
 			source:  "file.sha512",
 			algo:    "sha512",
-			hex:     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			hex:     strings.Repeat("abcdef0123456789", 8),
 		},
 		{
 			name:    "bare sha256 hex",
@@ -104,7 +104,7 @@ func TestIsValidHex(t *testing.T) {
 func TestFetchSidecarHashTLS(t *testing.T) {
 	payload := makePayload(32 * 1024)
 	hash := sha256Hex(payload)
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(hash + "  file.bin\n"))
 	}))
@@ -161,7 +161,7 @@ func TestParseSidecarContentMD5SHA1(t *testing.T) {
 func TestFetchSidecarHashHTTP(t *testing.T) {
 	payload := makePayload(16 * 1024)
 	hash := sha256Hex(payload)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(hash + "  file.bin\n"))
 	}))

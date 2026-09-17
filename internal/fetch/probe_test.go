@@ -1,9 +1,9 @@
 package fetch
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -36,7 +36,7 @@ func TestProbeDecisionMatrix(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodHead {
 					if tt.headCL {
-						w.Header().Set("Content-Length", fmt.Sprintf("%d", total))
+						w.Header().Set("Content-Length", strconv.Itoa(total))
 					}
 					if tt.headAR {
 						w.Header().Set("Accept-Ranges", "bytes")
@@ -45,13 +45,13 @@ func TestProbeDecisionMatrix(t *testing.T) {
 					return
 				}
 				if tt.range206 {
-					w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", total-1, total))
+					w.Header().Set("Content-Range", contentRange(0, int64(total-1), total))
 					w.Header().Set("Content-Length", "1")
 					w.WriteHeader(http.StatusPartialContent)
 					_, _ = w.Write(payload[:1])
 					return
 				}
-				w.Header().Set("Content-Length", fmt.Sprintf("%d", total))
+				w.Header().Set("Content-Length", strconv.Itoa(total))
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(payload)
 			}))

@@ -143,8 +143,8 @@ func (m *mmapWriter) Close() error {
 // known size and production never truncates one (single-stream truncation
 // runs on a raw pwrite writer). Fail loudly rather than carry dead remap
 // logic; the fileWriter interface requires the method.
-func (m *mmapWriter) Truncate(size int64) error {
-	return fmt.Errorf("mmap writer cannot be truncated (raw pwrite writer required)")
+func (m *mmapWriter) Truncate(_ int64) error {
+	return errors.New("mmap writer cannot be truncated (raw pwrite writer required)")
 }
 
 // allocateFileWriter returns the fastest fileWriter for the given
@@ -154,7 +154,7 @@ func (m *mmapWriter) Truncate(size int64) error {
 // When resume is true and the file already exists with the right size,
 // we keep it open RDWR for mmap (no truncation). Otherwise we create
 // or truncate to size and mmap the freshly-sized region.
-func allocateFileWriter(path string, size int64, resume bool, noMmap bool) (fileWriter, error) {
+func allocateFileWriter(path string, size int64, resume, noMmap bool) (fileWriter, error) {
 	// Refuse to write the output through a symlink: with attacker- or
 	// operator-supplied URLs, a pre-placed symlink at the output path
 	// could redirect writes into an arbitrary file. Same guard clearResume

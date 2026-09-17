@@ -109,7 +109,7 @@ func TestMirrorFailoverWithManifestResume(t *testing.T) {
 	t.Cleanup(bad.Close)
 
 	out := filepath.Join(t.TempDir(), "o.bin")
-	m := manifestFromPayload(t, payload, 1<<20, -1)
+	m := manifestFromPayload(t, payload, -1)
 	if err := WriteManifest(out+".gofetch.manifest", m); err != nil {
 		t.Fatal(err)
 	}

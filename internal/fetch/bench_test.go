@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,14 +23,14 @@ func BenchmarkParallelDownload(b *testing.B) {
 		w.Header().Set("Content-Length", "")
 		h := r.Header.Get("Range")
 		if h == "" {
-			w.Header().Set("Content-Length", i64toa(int64(size)))
+			w.Header().Set("Content-Length", strconv.Itoa(size))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(payload)
 			return
 		}
 		start, end := parseRangeFast(h)
-		w.Header().Set("Content-Range", rangeHdr(start, end, size))
-		w.Header().Set("Content-Length", i64toa(int64(end-start+1)))
+		w.Header().Set("Content-Range", contentRange(int64(start), int64(end), size))
+		w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = w.Write(payload[start : end+1])
 	}))
@@ -47,11 +48,12 @@ func BenchmarkParallelDownload(b *testing.B) {
 	b.SetBytes(int64(size))
 }
 
-// parseRangeFast extracts start/end from "bytes=START-END" — manual parsing
-// is faster than fmt.Sscanf in the hot server loop.
-func parseRangeFast(h string) (int, int) {
+// parseRangeFast extracts start/end from "bytes=START-END" via the stdlib
+// (strconv.Atoi uses optimized asm; the previous hand-rolled loop saved
+// nothing and duplicated what the stdlib already vectorizes).
+func parseRangeFast(h string) (start, end int) {
 	const p = "bytes="
-	if len(h) < len(p) {
+	if !strings.HasPrefix(h, p) {
 		return 0, 0
 	}
 	s := h[len(p):]
@@ -59,50 +61,10 @@ func parseRangeFast(h string) (int, int) {
 	if dash < 1 || dash >= len(s)-1 {
 		return 0, 0
 	}
-	return i64atoi(s[:dash]), i64atoi(s[dash+1:])
-}
-
-func rangeHdr(start, end, total int) string {
-	const maxLen = 64
-	var b [maxLen]byte
-	i := copy(b[:], "bytes ")
-	i += i64toaAppend(b[i:], int64(start))
-	b[i] = '-'
-	i++
-	i += i64toaAppend(b[i:], int64(end))
-	b[i] = '/'
-	i++
-	i += i64toaAppend(b[i:], int64(total))
-	return string(b[:i])
-}
-
-func i64toaAppend(b []byte, n int64) int {
-	if n == 0 {
-		b[0] = '0'
-		return 1
+	start, err1 := strconv.Atoi(s[:dash])
+	end, err2 := strconv.Atoi(s[dash+1:])
+	if err1 != nil || err2 != nil {
+		return 0, 0
 	}
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	copy(b, b[i:])
-	return len(b) - i
-}
-
-func i64atoi(s string) int {
-	n := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			break
-		}
-		n = n*10 + int(s[i]-'0')
-	}
-	return n
-}
-
-func i64toa(n int64) string {
-	var b [20]byte
-	return string(b[:i64toaAppend(b[:], n)])
+	return start, end
 }

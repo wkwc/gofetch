@@ -1,9 +1,9 @@
 package fetch
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -56,7 +56,7 @@ func TestProbeRangeGetMalformedContentRange(t *testing.T) {
 			return
 		}
 		hits++
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		w.Header().Set("Content-Range", "not-a-range")
 		w.WriteHeader(http.StatusPartialContent)
 	}))

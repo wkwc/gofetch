@@ -1,0 +1,43 @@
+# pre-commit framework config — mirrors scripts/precommit.sh (zero-dependency).
+# Install: pip install pre-commit && pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofumpt (fallback gofmt -s)
+        entry: bash -c 'if command -v gofumpt >/dev/null; then out=$(gofumpt -l ./cmd ./internal); else out=$(gofmt -s -l ./cmd ./internal); fi; [ -z "$out" ] || { echo "$out"; exit 1; }'
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-build
+        name: go build
+        entry: go build ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-focused-tests
+        name: go focused unit tests
+        entry: go test -count=1 -run 'TestParse|TestSplit|TestDedup|TestUncompleted|TestSeed|TestManifest|TestSidecar|TestHash|TestVerify|TestChecksum|TestBackoff|TestScale' ./internal/fetch/ ./cmd/...
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: go-focused-race
+        name: go focused race tests
+        entry: go test -race -count=1 -run 'TestSplit|TestDedup|TestUncompleted|TestManifest|TestAcquire|TestBuf|TestPool|TestQueue|TestVerify|TestParse' ./internal/fetch/
+        language: system
+        types: [go]
+        pass_filenames: false
+      - id: golangci-lint
+        name: golangci-lint (if new enough)
+        # Soft gate locally (CI enforces v2.13.2); skips cleanly when
+        # missing OR when the installed copy predates the go1.27 toolchain.
+        entry: bash -c 'command -v golangci-lint >/dev/null || exit 0; out=$(golangci-lint run --timeout=5m 2>&1) || { echo "$out" | grep -q "lower than the targeted Go version" && exit 0; echo "$out"; exit 1; }'
+        language: system
+        types: [go]
+        pass_filenames: false

@@ -22,7 +22,7 @@ import (
 //   - "hex..."      → bare hex, inferred by length (32=md5, 40=sha1, 64=sha256, 128=sha512)
 //   - "/path/file"  → read sidecar file from local path
 //   - "http(s)://"  → fetch sidecar hash from a URL
-func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo, hashHex string, err error) {
+func resolveHash(ctx context.Context, flag, rawURL, outPath string) (algo, hashHex string, err error) {
 	if flag == "" || flag == "auto" {
 		// "" auto-detects a local <out>.sha256/.sha512 sidecar only.
 		// "auto" falls back to fetching <url>.sha256 / <url>.sha512.
@@ -52,11 +52,11 @@ func resolveHash(ctx context.Context, flag string, rawURL, outPath string) (algo
 // download — the common case for mirrors that ship checksums.
 func autoDetectLocalSidecar(outPath string) (algo, hashHex string, err error) {
 	for _, suffix := range []string{".sha256", ".sha512", ".sha1", ".md5", ".sha256sum", ".sha512sum", ".sha1sum", ".md5sum"} {
-		path := outPath + suffix
-		if _, statErr := os.Stat(path); statErr != nil {
+		sidecarPath := outPath + suffix
+		if _, statErr := os.Stat(sidecarPath); statErr != nil {
 			continue
 		}
-		return fetch.ReadSidecarFile(path)
+		return fetch.ReadSidecarFile(sidecarPath)
 	}
 	// Container checksum file in the output's directory.
 	dir := filepath.Dir(outPath)

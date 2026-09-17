@@ -208,7 +208,7 @@ func TestNewTransport(t *testing.T) {
 func TestValidateCACert(t *testing.T) {
 	dir := t.TempDir()
 	// A real (self-signed) certificate validates.
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(srv.Close)
 	valid := filepath.Join(dir, "ca.pem")
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})

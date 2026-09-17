@@ -267,25 +267,36 @@ func TestDropCompletedOverlapping(t *testing.T) {
 		bad       []ChunkHash
 		want      []Task
 	}{
-		{"nil bad (merged unchanged)",
-			[]Task{{0, 9}, {10, 19}}, nil,
-			[]Task{{0, 19}}}, // dedupTasks unions the adjacent ranges
-		{"drop the one bad chunk from a contiguous file",
+		{
+			"nil bad (merged unchanged)",
+			[]Task{{0, 9}, {10, 19}},
+			nil,
+			[]Task{{0, 19}},
+		}, // dedupTasks unions the adjacent ranges
+		{
+			"drop the one bad chunk from a contiguous file",
 			[]Task{{0, 9}, {10, 19}, {20, 29}},
 			[]ChunkHash{{Start: 10, End: 19, Hash: "x"}},
-			[]Task{{0, 9}, {20, 29}}},
-		{"partial overlap keeps the good fragments on both sides",
+			[]Task{{0, 9}, {20, 29}},
+		},
+		{
+			"partial overlap keeps the good fragments on both sides",
 			[]Task{{5, 25}},
 			[]ChunkHash{{Start: 15, End: 19, Hash: "x"}},
-			[]Task{{5, 14}, {20, 25}}},
-		{"two bad chunks drop two spans from a contiguous file",
+			[]Task{{5, 14}, {20, 25}},
+		},
+		{
+			"two bad chunks drop two spans from a contiguous file",
 			[]Task{{0, 9}, {10, 19}, {20, 29}, {30, 39}},
 			[]ChunkHash{{Start: 10, End: 19, Hash: "x"}, {Start: 30, End: 39, Hash: "y"}},
-			[]Task{{0, 9}, {20, 29}}},
-		{"disjoint completed task fully survives",
+			[]Task{{0, 9}, {20, 29}},
+		},
+		{
+			"disjoint completed task fully survives",
 			[]Task{{50, 59}},
 			[]ChunkHash{{Start: 0, End: 9, Hash: "x"}},
-			[]Task{{50, 59}}},
+			[]Task{{50, 59}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

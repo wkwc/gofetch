@@ -15,7 +15,7 @@ import (
 // clients install: hop cap, scheme cap, and private-host rejection.
 func TestCheckRedirectSafeGuards(t *testing.T) {
 	req := func(u string) *http.Request {
-		r, err := http.NewRequestWithContext(testCtx(t, time.Second), http.MethodGet, u, nil)
+		r, err := http.NewRequestWithContext(testCtx(t, time.Second), http.MethodGet, u, http.NoBody)
 		if err != nil {
 			t.Fatalf("new request: %v", err)
 		}
@@ -58,7 +58,11 @@ func TestCheckRedirectSafeEndToEnd(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := &http.Client{CheckRedirect: CheckRedirectSafe, Timeout: 5 * time.Second}
-	resp, err := client.Get(srv.URL)
+	req, err := http.NewRequestWithContext(testCtx(t, 5*time.Second), http.MethodGet, srv.URL, http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := client.Do(req)
 	if err == nil {
 		_ = resp.Body.Close()
 		t.Fatal("redirect to loopback should be blocked, got nil error")
@@ -73,7 +77,7 @@ func TestCheckRedirectSafeEndToEnd(t *testing.T) {
 func TestNewSafeClientFetchesHash(t *testing.T) {
 	payload := makePayload(8 * 1024)
 	hash := sha256Hex(payload)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(hash + "  out.bin\n"))
 	}))
 	t.Cleanup(srv.Close)
@@ -115,7 +119,7 @@ func TestFetchChecksumForFile(t *testing.T) {
 	iso := sha256Hex(makePayload(2048))
 	content := iso + "  ubuntu-24.04.3-desktop-amd64.iso\n"
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(content))
 	}))
 	t.Cleanup(srv.Close)

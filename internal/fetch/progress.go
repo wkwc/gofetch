@@ -90,7 +90,7 @@ func (p *progress) add(n int64) {
 	p.preDone.Add(n)
 }
 
-func (p *progress) snapshot() (int64, int64) {
+func (p *progress) snapshot() (done, total int64) {
 	var sum int64
 	for _, ws := range p.states {
 		sum += ws.bytesDone.Load()

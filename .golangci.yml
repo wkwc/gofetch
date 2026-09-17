@@ -1,0 +1,117 @@
+# golangci-lint v2 config — strong local + CI gates (100go #16).
+# Pinned in CI to v2.13.2; keep this file compatible with that version.
+version: "2"
+
+run:
+  timeout: 5m
+  # New issues only on changed lines for PRs; full scan on main.
+  # (golangci-lint-action sets this automatically for pull_request.)
+  relative-path-mode: gomod
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt # stricter than gofmt (octal 0o, short cases, etc.)
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: github.com/wkwc/gofetch
+
+linters:
+  enable:
+    # Correctness (bugs that compile)
+    - errcheck    # unchecked errors (#53, #54)
+    - govet       # shadowing, printf, loopvar, tests
+    - staticcheck # bug-prone patterns
+    - ineffassign
+    - unused
+    - bodyclose   # unclosed HTTP bodies (#79)
+    - noctx       # http requests without context (#60)
+    - rowserrcheck
+    - sqlclosecheck
+    # Style / complexity (readability, KISS)
+    - misspell
+    - unconvert
+    - unparam
+    - gocritic
+    - revive
+    - whitespace
+    - lll
+    # Concurrency / perf awareness
+    - copyloopvar
+    - prealloc      # preallocate slices/maps when size known (#21, #27)
+    - perfsprint    # fmt.Sprintf → faster alternatives where trivial
+    - usestdlibvars # prefer stdlib constants over hand-rolled copies
+    - godot         # declaration comments end in a period (#15 docs)
+  settings:
+    errcheck:
+      # Tests legitimately assert errors inline; lib code must check all.
+      exclude-functions:
+        - (*os.File).Close
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+    govet:
+      # Default analyzer set (printf, loopvar, tests, etc.).
+      # `shadow` is intentionally NOT enabled: idiomatic `if err := ...`
+      # reuse would drown the signal (100go #1 is about real shadowing
+      # bugs, which code review + tests cover here).
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: package-comments
+        - name: var-naming
+        - name: indent-error-flow # early returns, flat happy path (#2)
+        - name: errorf            # %w vs %v discipline (#49)
+        - name: error-naming
+        - name: error-strings
+        - name: if-return
+        - name: increment-decrement
+        - name: range
+        - name: receiver-naming
+        - name: superfluous-else # no else after return (#2)
+        - name: unused-parameter
+      # NOTE: `exported` (stutter) rule is intentionally off: renaming
+      # public API (FetchSidecarHash, …) would break callers for a nit.
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        # Options-by-value is intentional public API (functional-options
+        # style, #11): copying 192 B once per download setup is noise
+        # next to network I/O, and a pointer would alias caller state.
+        - hugeParam
+    godot:
+      # Declaration comments must read as finished sentences (#15).
+      scope: declarations
+      period: true
+    # NOTE: nilnil is intentionally off: loadResume's (nil, nil) "no
+    # resume state, not an error" contract is documented and load-bearing;
+    # a sentinel would add handling complexity at every caller for zero value.
+    lll:
+      line-length: 140
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+      - common-false-positives
+    paths:
+      - internal/fetch/*_test.go
+      - cmd/gofetch/*_test.go
+    rules:
+      # Long CLI help strings and probe output are fine.
+      - path: cmd/gofetch/.*\.go
+        linters:
+          - lll
+      # Test servers intentionally use fmt for readability.
+      - path: internal/fetch/*_test\.go
+        linters:
+          - errcheck
+          - dupl
+          - gocritic
+
+issues:
+  max-issues-per-linter: 50
+  max-same-text: 10
