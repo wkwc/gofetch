@@ -78,13 +78,23 @@ if [ "$sh_fail" -eq 0 ]; then echo "  ok"; else fail=1; fi
 # cannot even load this repo's config — that is an environment problem,
 # not a code problem, so skip (loudly) instead of failing.
 if [ -n "$GOLANGCI" ]; then
-  step "golangci-lint run ($GOLANGCI)"
-  if lint_out=$("$GOLANGCI" run --timeout=5m ./... 2>&1); then
-    echo "  ok"
-  elif echo "$lint_out" | grep -q "lower than the targeted Go version"; then
+  step "golangci-lint config verify + run ($GOLANGCI)"
+  # `run` alone does not enforce schema strictly (CI's action runs
+  # `config verify` first and fails on it), so verify explicitly for
+  # local/CI parity.
+  if verify_out=$("$GOLANGCI" config verify 2>&1); then
+    if lint_out=$("$GOLANGCI" run --timeout=5m ./... 2>&1); then
+      echo "  ok"
+    elif echo "$lint_out" | grep -q "lower than the targeted Go version"; then
+      echo "  skip ($GOLANGCI too old for the go1.27 toolchain — CI enforces v2.13.2)"
+    else
+      echo "$lint_out"
+      fail=1
+    fi
+  elif echo "$verify_out" | grep -q "lower than the targeted Go version"; then
     echo "  skip ($GOLANGCI too old for the go1.27 toolchain — CI enforces v2.13.2)"
   else
-    echo "$lint_out"
+    echo "$verify_out"
     fail=1
   fi
 else

@@ -15,13 +15,17 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/wkwc/gofetch
+      local-prefixes:
+        - github.com/wkwc/gofetch
 
 linters:
   enable:
     # Correctness (bugs that compile)
     - errcheck    # unchecked errors (#53, #54)
-    - govet       # shadowing, printf, loopvar, tests
+    - govet       # default analyzers (printf, loopvar, tests); `shadow`
+                  # stays off: idiomatic `if err := ...` reuse would drown
+                  # the signal (100go #1 is about real shadowing bugs,
+                  # covered by review + tests)
     - staticcheck # bug-prone patterns
     - ineffassign
     - unused
@@ -51,11 +55,6 @@ linters:
         - fmt.Fprint
         - fmt.Fprintln
         - fmt.Fprintf
-    govet:
-      # Default analyzer set (printf, loopvar, tests, etc.).
-      # `shadow` is intentionally NOT enabled: idiomatic `if err := ...`
-      # reuse would drown the signal (100go #1 is about real shadowing
-      # bugs, which code review + tests cover here).
     revive:
       enable-all-rules: false
       rules:
@@ -114,4 +113,3 @@ linters:
 
 issues:
   max-issues-per-linter: 50
-  max-same-text: 10

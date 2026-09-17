@@ -49,33 +49,31 @@ func (h *headerList) Set(v string) error {
 
 func run(args []string) int {
 	fs := flag.NewFlagSet("gofetch", flag.ContinueOnError)
-	var (
-		outPath     = fs.String("o", "", "output file path (default: basename of URL); an existing directory downloads into it")
-		quiet       = fs.Bool("q", false, "suppress progress output")
-		verbose     = fs.Bool("v", false, "verbose logging")
-		hashFlag    = fs.String("h", "", "verify integrity: auto-detects local sidecar, or md5:hex / sha1:hex / sha256:hex / sha512:hex / path / auto")
-		noResume    = fs.Bool("no-resume", false, "disable resume (default: on)")
-		mirrorsFlag = fs.String("m", "", "comma-separated mirror URLs tried on failure (bare hostnames get https://)")
-		manifestOut = fs.String("manifest-out", "", "after download, write a per-chunk integrity manifest of the output to this path")
-		limitRate   = fs.String("limit-rate", "", "cap aggregate download speed (per file): e.g. 500k, 2M, 1G")
-		userAgent   = fs.String("A", "", "custom User-Agent header")
-		proxy       = fs.String("proxy", "", "HTTP(S)/SOCKS5 proxy URL (overrides environment)")
-		allowLocal  = fs.Bool("allow-loopback", false, "permit loopback/private dials (local benchmarks/tests only; unsafe for untrusted URLs)")
-		info        = fs.Bool("info", false, "probe URLs and print size/range support without downloading")
-		workers     = fs.Int("x", 0, "override auto-tuned worker count (0 = auto)")
-		bufSize     = fs.String("buf-size", "", "override auto-tuned read buffer per worker (e.g. 64k, 1M)")
-		maxRetries  = fs.Int("max-retries", 0, "override the per-chunk retry budget (0 = auto, default 10)")
-		noClobber   = fs.Bool("no-clobber", false, "skip downloads whose output file already exists")
-		noMmap      = fs.Bool("no-mmap", false, "use raw pwrite instead of mmap (filesystems where mmap misbehaves)")
-		caCert      = fs.String("ca-cert", "", "PEM file of extra root CAs to trust (private/self-signed mirrors)")
-		jsonOut     = fs.Bool("json", false, "with --info, emit JSON (one object per URL)")
-		showVersion = fs.Bool("version", false, "print version and exit")
-		headers     headerList
-	)
-	fs.Var(&headers, "H", "send a custom header 'Name: value' (repeatable)")
-	fs.Var(&headers, "header", "send a custom header 'Name: value' (repeatable)")
-	fs.StringVar(userAgent, "user-agent", "", "custom User-Agent header")
-	fs.IntVar(workers, "workers", 0, "override auto-tuned worker count (0 = auto)")
+	var cfg cliConfig
+	fs.StringVar(&cfg.outPath, "o", "", "output file path (default: basename of URL); an existing directory downloads into it")
+	fs.BoolVar(&cfg.quiet, "q", false, "suppress progress output")
+	fs.BoolVar(&cfg.verbose, "v", false, "verbose logging")
+	fs.StringVar(&cfg.hashFlag, "h", "", "verify integrity: auto-detects local sidecar, or md5:hex / sha1:hex / sha256:hex / sha512:hex / path / auto")
+	fs.BoolVar(&cfg.noResume, "no-resume", false, "disable resume (default: on)")
+	fs.StringVar(&cfg.mirrorsFlag, "m", "", "comma-separated mirror URLs tried on failure (bare hostnames get https://)")
+	fs.StringVar(&cfg.manifestOut, "manifest-out", "", "after download, write a per-chunk integrity manifest of the output to this path")
+	fs.StringVar(&cfg.limitRate, "limit-rate", "", "cap aggregate download speed (per file): e.g. 500k, 2M, 1G")
+	fs.StringVar(&cfg.userAgent, "A", "", "custom User-Agent header")
+	fs.StringVar(&cfg.proxy, "proxy", "", "HTTP(S)/SOCKS5 proxy URL (overrides environment)")
+	fs.BoolVar(&cfg.allowLocal, "allow-loopback", false, "permit loopback/private dials (local benchmarks/tests only; unsafe for untrusted URLs)")
+	fs.BoolVar(&cfg.info, "info", false, "probe URLs and print size/range support without downloading")
+	fs.IntVar(&cfg.workers, "x", 0, "override auto-tuned worker count (0 = auto)")
+	fs.StringVar(&cfg.bufSize, "buf-size", "", "override auto-tuned read buffer per worker (e.g. 64k, 1M)")
+	fs.IntVar(&cfg.maxRetries, "max-retries", 0, "override the per-chunk retry budget (0 = auto, default 10)")
+	fs.BoolVar(&cfg.noClobber, "no-clobber", false, "skip downloads whose output file already exists")
+	fs.BoolVar(&cfg.noMmap, "no-mmap", false, "use raw pwrite instead of mmap (filesystems where mmap misbehaves)")
+	fs.StringVar(&cfg.caCert, "ca-cert", "", "PEM file of extra root CAs to trust (private/self-signed mirrors)")
+	fs.BoolVar(&cfg.jsonOut, "json", false, "with --info, emit JSON (one object per URL)")
+	fs.BoolVar(&cfg.showVersion, "version", false, "print version and exit")
+	fs.Var(&cfg.headers, "H", "send a custom header 'Name: value' (repeatable)")
+	fs.Var(&cfg.headers, "header", "send a custom header 'Name: value' (repeatable)")
+	fs.StringVar(&cfg.userAgent, "user-agent", "", "custom User-Agent header")
+	fs.IntVar(&cfg.workers, "workers", 0, "override auto-tuned worker count (0 = auto)")
 	fs.Usage = func() { usage(fs) }
 
 	if err := fs.Parse(args); err != nil {
@@ -87,7 +85,7 @@ func run(args []string) int {
 		return 2
 	}
 
-	if *showVersion {
+	if cfg.showVersion {
 		fmt.Printf("gofetch %s (go %s)\n", version, runtime.Version())
 		return 0
 	}
@@ -95,7 +93,7 @@ func run(args []string) int {
 		fs.Usage()
 		return 2
 	}
-	if *allowLocal {
+	if cfg.allowLocal {
 		// Explicit opt-in for the repo's own benchmark scripts and local
 		// testing against a benchserver on 127.0.0.1. Never pass this for
 		// URLs you do not trust. SECURITY.md documents the tradeoff.
@@ -107,56 +105,10 @@ func run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
-	mirrors, err := normalizeMirrors(ctx, *mirrorsFlag)
-	if err != nil {
+	var err error
+	if cfg, err = resolveConfig(ctx, cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
-	}
-	rate, err := parseRateLimit(*limitRate)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "gofetch:", err)
-		return 1
-	}
-	if err := validateHeaders(headers); err != nil {
-		fmt.Fprintln(os.Stderr, "gofetch:", err)
-		return 1
-	}
-	if *proxy != "" {
-		if p, err := url.Parse(*proxy); err != nil || (p.Scheme != "http" && p.Scheme != "https" && p.Scheme != "socks5") {
-			fmt.Fprintln(os.Stderr, "gofetch: invalid --proxy URL (use http://, https:// or socks5://)")
-			return 1
-		}
-	}
-	if *workers < 0 || *workers > 256 {
-		fmt.Fprintln(os.Stderr, "gofetch: -x workers must be 0 (auto) or between 1 and 256")
-		return 1
-	}
-	if *maxRetries < 0 || *maxRetries > 100 {
-		fmt.Fprintln(os.Stderr, "gofetch: --max-retries must be 0 (auto) or between 1 and 100")
-		return 1
-	}
-	if *jsonOut && !*info {
-		fmt.Fprintln(os.Stderr, "gofetch: --json requires --info")
-		return 1
-	}
-	if *caCert != "" {
-		if err := fetch.ValidateCACert(*caCert); err != nil {
-			fmt.Fprintf(os.Stderr, "gofetch: --ca-cert: %v\n", err)
-			return 1
-		}
-	}
-	bufBytes := int64(0)
-	if *bufSize != "" {
-		var err error
-		// Same number+suffix parser as --limit-rate; value is bytes here.
-		if bufBytes, err = parseRateLimit(*bufSize); err != nil {
-			fmt.Fprintln(os.Stderr, "gofetch:", err)
-			return 1
-		}
-		if bufBytes != 0 && (bufBytes < 4096 || bufBytes > 32<<20) {
-			fmt.Fprintln(os.Stderr, "gofetch: --buf-size must be between 4k and 32M")
-			return 1
-		}
 	}
 
 	rawURLs := fs.Args()
@@ -168,29 +120,8 @@ func run(args []string) int {
 		}
 	}
 
-	cfg := cliConfig{
-		outPath:     *outPath,
-		hashFlag:    *hashFlag,
-		manifestOut: *manifestOut,
-		userAgent:   *userAgent,
-		proxy:       *proxy,
-		caCert:      *caCert,
-		headers:     headers,
-		mirrors:     mirrors,
-		rate:        rate,
-		bufBytes:    bufBytes,
-		workers:     *workers,
-		maxRetries:  *maxRetries,
-		quiet:       *quiet,
-		verbose:     *verbose,
-		noResume:    *noResume,
-		noClobber:   *noClobber,
-		noMmap:      *noMmap,
-		jsonOut:     *jsonOut,
-	}
-
 	// --info probes each URL and reports without downloading.
-	if *info {
+	if cfg.info {
 		return runInfo(ctx, rawURLs, cfg.jsonOut)
 	}
 
