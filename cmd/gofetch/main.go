@@ -12,11 +12,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	fssys "io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -170,50 +168,33 @@ func run(args []string) int {
 		}
 	}
 
-	// --info probes each URL and reports without downloading.
-	if *info {
-		exit := 0
-		for _, u := range rawURLs {
-			p, err := fetch.ProbeURL(ctx, u)
-			// Would -h auto verify this URL? Local sidecar first, then the
-			// remote checksum detection.
-			cksum, _, _ := autoDetectLocalSidecar(urlBaseName(u))
-			if cksum == "" {
-				cksum, _, _ = autoDetectRemoteSidecar(ctx, u)
-			}
-			if err != nil {
-				if *jsonOut {
-					emitProbeJSON(u, fetch.ProbeInfo{}, err, "")
-				} else {
-					fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", u, err)
-				}
-				exit = 1
-				continue
-			}
-			if *jsonOut {
-				emitProbeJSON(u, p, nil, cksum)
-			} else {
-				ranges := "no"
-				if p.SupportsRanges {
-					ranges = "yes"
-				}
-				checksum := "none"
-				if cksum != "" {
-					checksum = cksum + " (auto)"
-				}
-				fmt.Printf("url:    %s\n", u)
-				fmt.Printf("size:   %s\n", fetch.HumanBytes(p.Total))
-				fmt.Printf("ranges: %s\n", ranges)
-				fmt.Printf("workers: %d\n", p.Workers)
-				fmt.Printf("buf:    %s\n", fetch.HumanBytes(int64(p.BufSize)))
-				fmt.Printf("checksum: %s\n", checksum)
-				fmt.Println()
-			}
-		}
-		return exit
+	cfg := cliConfig{
+		outPath:     *outPath,
+		hashFlag:    *hashFlag,
+		manifestOut: *manifestOut,
+		userAgent:   *userAgent,
+		proxy:       *proxy,
+		caCert:      *caCert,
+		headers:     headers,
+		mirrors:     mirrors,
+		rate:        rate,
+		bufBytes:    bufBytes,
+		workers:     *workers,
+		maxRetries:  *maxRetries,
+		quiet:       *quiet,
+		verbose:     *verbose,
+		noResume:    *noResume,
+		noClobber:   *noClobber,
+		noMmap:      *noMmap,
+		jsonOut:     *jsonOut,
 	}
 
-	outs, err := resolveOutputs(*outPath, rawURLs)
+	// --info probes each URL and reports without downloading.
+	if *info {
+		return runInfo(ctx, rawURLs, cfg.jsonOut)
+	}
+
+	outs, err := resolveOutputs(cfg.outPath, rawURLs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
@@ -224,116 +205,22 @@ func run(args []string) int {
 	var sharedTr *http.Transport
 	if len(rawURLs) > 1 {
 		sharedTr = fetch.NewTransport(fetch.Options{
-			Proxy: *proxy, CACert: *caCert, Workers: *workers, BufSize: int(bufBytes),
+			Proxy: cfg.proxy, CACert: cfg.caCert, Workers: cfg.workers, BufSize: int(cfg.bufBytes),
 		})
 		defer sharedTr.CloseIdleConnections()
 	}
 
 	exit := 0
+	multi := len(rawURLs) > 1
 	for i, rawURL := range rawURLs {
-		out := outs[i]
-		if *noClobber {
-			// Skip only COMPLETE files. A partial download is identified by
-			// a resume sidecar — skipping it would strand the partial bytes
-			// forever; instead proceed and resume.
-			if _, err := os.Stat(out); err == nil {
-				if _, serr := os.Stat(out + ".gofetch.resume"); errors.Is(serr, fssys.ErrNotExist) {
-					fmt.Fprintf(os.Stderr, "gofetch: %s: already exists, skipping\n", out)
-					continue
-				}
+		if code := runOne(ctx, cfg, rawURL, outs[i], sharedTr, multi); code != 0 {
+			if code == interruptExit {
+				return code
 			}
-		}
-		algo, hashHex, err := resolveHash(ctx, *hashFlag, rawURL, out)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", rawURL, err)
 			exit = 1
-			continue
 		}
-		d := fetch.NewDownloader(rawURL, out, fetch.Options{
-			HashAlgo:     algo,
-			ExpectedHash: hashHex,
-			NoResume:     *noResume,
-			Verbose:      *verbose,
-			Quiet:        *quiet,
-			Mirrors:      mirrors,
-			Headers:      headers,
-			RateLimit:    rate,
-			Proxy:        *proxy,
-			UserAgent:    *userAgent,
-			Workers:      *workers,
-			BufSize:      int(bufBytes),
-			RetryMax:     *maxRetries,
-			CACert:       *caCert,
-			NoMmap:       *noMmap,
-			Transport:    sharedTr,
-		})
-
-		err = d.Download(ctx)
-		d.Close() // release keep-alive connections regardless of outcome
-		if err != nil {
-			// User-initiated cancel (Ctrl-C / SIGTERM / SIGHUP) is not a
-			// failure of the downloader — the partial progress was already
-			// flushed to the resume sidecar, so say so plainly instead of
-			// wrapping it as a mirror error.
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				fmt.Fprintf(os.Stderr,
-					"gofetch: interrupted; partial progress saved to %s, re-run to resume\n",
-					out+".gofetch.resume")
-				return 130
-			}
-			fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", rawURL, err)
-			exit = 1
-			continue
-		}
-		if *manifestOut != "" {
-			mout := *manifestOut
-			if len(rawURLs) > 1 {
-				if err := os.MkdirAll(mout, 0o755); err != nil {
-					fmt.Fprintf(os.Stderr, "gofetch: %s: manifest dir: %v\n", rawURL, err)
-					exit = 1
-					continue
-				}
-				mout = filepath.Join(mout, filepath.Base(out)+".gofetch.manifest")
-			}
-			if err := writeManifest(mout, out); err != nil {
-				fmt.Fprintf(os.Stderr, "gofetch: %s: %v\n", rawURL, err)
-				exit = 1
-				continue
-			}
-		}
-		// Always print the output path on success (quiet: filename only;
-		// verbose/normal: summary already went to stderr in finalize).
-		fmt.Println(out)
 	}
 	return exit
-}
-
-// probeJSON is the machine-readable shape of one --info --json result.
-// On failure only url and error are populated; success carries the probe.
-type probeJSON struct {
-	URL            string `json:"url"`
-	Size           int64  `json:"size,omitempty"`
-	SupportsRanges bool   `json:"supports_ranges,omitempty"`
-	Workers        int    `json:"workers,omitempty"`
-	BufSize        int    `json:"buf_size,omitempty"`
-	Checksum       string `json:"checksum,omitempty"` // algo -h auto would find ("" = none)
-	Error          string `json:"error,omitempty"`
-}
-
-// emitProbeJSON prints one probe result (or its error) as a JSON line.
-// Uses encoding/json (not fmt %q) so arbitrary URL bytes stay valid JSON.
-func emitProbeJSON(rawURL string, p fetch.ProbeInfo, err error, checksum string) {
-	out := probeJSON{URL: rawURL}
-	if err != nil {
-		out.Error = err.Error()
-	} else {
-		out.Size = p.Total
-		out.SupportsRanges = p.SupportsRanges
-		out.Workers = p.Workers
-		out.BufSize = p.BufSize
-		out.Checksum = checksum
-	}
-	_ = json.NewEncoder(os.Stdout).Encode(out)
 }
 
 // resolveOutputs maps each URL to its output path. With a single URL,
