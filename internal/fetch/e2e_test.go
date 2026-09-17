@@ -764,12 +764,9 @@ func TestHTTPSDownloadWithCACert(t *testing.T) {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 
-	// Trust the self-signed server cert via the --ca-cert mechanism.
+	// Trust the self-signed server cert via the --ca-cert mechanism
+	// (Certificate().Raw is DER — PEM-encode it first).
 	certPath := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(certPath, srv.Certificate().Raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Certificate().Raw is DER, not PEM — encode it.
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 	if err := os.WriteFile(certPath, pemBytes, 0o644); err != nil {
 		t.Fatal(err)

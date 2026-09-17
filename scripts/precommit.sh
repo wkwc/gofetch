@@ -61,6 +61,18 @@ fi
 step "build ./..."
 if ! go build ./...; then fail=1; else echo "  ok"; fi
 
+step "shell scripts (bash -n + shellcheck -S warning if present)"
+sh_fail=0
+for f in scripts/*.sh; do
+  bash -n "$f" || sh_fail=1
+done
+if command -v shellcheck >/dev/null; then
+  shellcheck -S warning scripts/*.sh || sh_fail=1
+else
+  echo "  shellcheck not installed — bash -n only (CI enforces shellcheck)"
+fi
+if [ "$sh_fail" -eq 0 ]; then echo "  ok"; else fail=1; fi
+
 # Strongest gate, soft locally: CI pins golangci-lint v2.13.2 and enforces
 # it. Run it here when present. A copy built against an older Go toolchain
 # cannot even load this repo's config — that is an environment problem,

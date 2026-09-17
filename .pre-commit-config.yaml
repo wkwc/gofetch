@@ -33,6 +33,12 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
+      - id: shell-scripts
+        name: bash syntax + shellcheck
+        entry: bash -c 'for f in scripts/*.sh; do bash -n "$f" || exit 1; done; command -v shellcheck >/dev/null || exit 0; shellcheck -S warning scripts/*.sh'
+        language: system
+        types: [shell]
+        pass_filenames: false
       - id: golangci-lint
         name: golangci-lint (if new enough)
         # Soft gate locally (CI enforces v2.13.2); skips cleanly when
