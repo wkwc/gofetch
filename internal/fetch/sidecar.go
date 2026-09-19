@@ -81,6 +81,10 @@ func ReadSidecarFile(path string) (algo, hashHex string, err error) {
 	return ParseSidecarContent(string(data), abs)
 }
 
+// maxSidecarBytes bounds a fetched sidecar/container body: checksum
+// files are small by construction, so anything larger is abuse.
+const maxSidecarBytes = 1 << 20
+
 // fetchSidecarContent fetches a hash file from a URL with the same SSRF
 // guards as the main downloader and returns its raw text (bounded to
 // 1 MiB — checksum containers are small).
@@ -110,7 +114,7 @@ func fetchSidecarContent(ctx context.Context, client *http.Client, sidecarURL st
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("sidecar HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSidecarBytes))
 	if err != nil {
 		return "", fmt.Errorf("read sidecar: %w", err)
 	}

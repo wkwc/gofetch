@@ -306,7 +306,7 @@ func TestMidRangeEOFRetriesRecovery(t *testing.T) {
 
 	srv := newRangeServer(t, payload, &rangeServerConfig{
 		Write: func(w http.ResponseWriter, _ *http.Request, payload []byte, start, end int64) {
-			key := fmt.Sprintf("%d-%d", start, end)
+			key := rangeKey(start, end)
 			attemptsMu.Lock()
 			attempts[key]++
 			n := attempts[key]
@@ -438,7 +438,7 @@ func TestRateLimitedNoThrash(t *testing.T) {
 	srv := newRangeServer(t, payload, &rangeServerConfig{
 		Write: func(w http.ResponseWriter, _ *http.Request, payload []byte, start, end int64) {
 			mu.Lock()
-			reqs[fmt.Sprintf("%d-%d", start, end)]++
+			reqs[rangeKey(start, end)]++
 			mu.Unlock()
 			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
 			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))

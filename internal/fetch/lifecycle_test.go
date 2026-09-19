@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -22,11 +23,13 @@ func TestNoGoroutineLeakAcrossDownloads(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Accept-Ranges", "bytes")
 		if h := r.Header.Get("Range"); h != "" {
-			start, end := parseRangeFast(h)
-			if end >= len(payload) {
-				end = len(payload) - 1
+			start, end, ok := parseRangeHeader(h, len(payload))
+			if !ok {
+				http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
+				return
 			}
-			w.Header().Set("Content-Range", contentRange(int64(start), int64(end), len(payload)))
+			w.Header().Set("Content-Range", contentRange(start, end, len(payload)))
+			w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 			w.WriteHeader(http.StatusPartialContent)
 			_, _ = w.Write(payload[start : end+1])
 			return

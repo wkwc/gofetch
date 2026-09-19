@@ -130,6 +130,17 @@ func contentRange(start, end int64, total int) string {
 	return string(buf)
 }
 
+// rangeKey builds the "START-END" map key test chaos servers use to count
+// per-range hits. One definition so key format can't drift between servers.
+func rangeKey(start, end int64) string {
+	var b [40]byte
+	buf := b[:0]
+	buf = strconv.AppendInt(buf, start, 10)
+	buf = append(buf, '-')
+	buf = strconv.AppendInt(buf, end, 10)
+	return string(buf)
+}
+
 // parseRangeHeader parses "bytes=START-END" against a payload of the given
 // size, clamping END to size-1. Returns ok=false for malformed or
 // unsatisfiable ranges (START<0 or START>END after clamping).

@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -28,9 +27,13 @@ func BenchmarkParallelDownload(b *testing.B) {
 			_, _ = w.Write(payload)
 			return
 		}
-		start, end := parseRangeFast(h)
-		w.Header().Set("Content-Range", contentRange(int64(start), int64(end), size))
-		w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
+		start, end, ok := parseRangeHeader(h, size)
+		if !ok {
+			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		w.Header().Set("Content-Range", contentRange(start, end, size))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = w.Write(payload[start : end+1])
 	}))
@@ -46,25 +49,4 @@ func BenchmarkParallelDownload(b *testing.B) {
 		}
 	}
 	b.SetBytes(int64(size))
-}
-
-// parseRangeFast extracts start/end from "bytes=START-END" via the stdlib
-// (strconv.Atoi uses optimized asm; the previous hand-rolled loop saved
-// nothing and duplicated what the stdlib already vectorizes).
-func parseRangeFast(h string) (start, end int) {
-	const p = "bytes="
-	if !strings.HasPrefix(h, p) {
-		return 0, 0
-	}
-	s := h[len(p):]
-	dash := strings.IndexByte(s, '-')
-	if dash < 1 || dash >= len(s)-1 {
-		return 0, 0
-	}
-	start, err1 := strconv.Atoi(s[:dash])
-	end, err2 := strconv.Atoi(s[dash+1:])
-	if err1 != nil || err2 != nil {
-		return 0, 0
-	}
-	return start, end
 }
