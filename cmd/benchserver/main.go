@@ -99,10 +99,10 @@ func main() {
 // parseBenchRange parses "bytes=START-END" without fmt.Sscanf reflection.
 func parseBenchRange(h string) (start, end int64, ok bool) {
 	const p = "bytes="
-	if !strings.HasPrefix(h, p) {
+	rest, ok := strings.CutPrefix(h, p)
+	if !ok {
 		return 0, 0, false
 	}
-	rest := h[len(p):]
 	dash := strings.IndexByte(rest, '-')
 	if dash < 1 || dash >= len(rest)-1 {
 		return 0, 0, false

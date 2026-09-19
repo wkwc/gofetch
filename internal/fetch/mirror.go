@@ -166,10 +166,10 @@ func isRetryableProbe(err error) bool {
 // malformed input, including inverted ranges (START > END) which no
 // well-behaved server sends.
 func parseContentRange(v string) (start, end, total int64, ok bool) {
-	if !strings.HasPrefix(v, "bytes ") {
+	rest, ok := strings.CutPrefix(v, "bytes ")
+	if !ok {
 		return 0, 0, 0, false
 	}
-	rest := v[len("bytes "):]
 	dash := strings.IndexByte(rest, '-')
 	slash := strings.IndexByte(rest, '/')
 	if dash < 0 || slash < 0 || slash < dash {

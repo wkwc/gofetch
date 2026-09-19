@@ -4,6 +4,7 @@
 package fetch
 
 import (
+	"cmp"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -117,10 +118,7 @@ func NewDownloader(rawURL, outPath string, opt Options) *Downloader {
 	if opt.RetryMax > 0 {
 		ac.RetryMax = opt.RetryMax
 	}
-	ua := opt.UserAgent
-	if ua == "" {
-		ua = defaultUserAgent
-	}
+	ua := cmp.Or(opt.UserAgent, defaultUserAgent)
 	d := &Downloader{
 		url:           rawURL,
 		mirrors:       opt.Mirrors,

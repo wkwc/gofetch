@@ -43,9 +43,7 @@ func ManifestForFile(path, algo string, chunkSize int64) (*Manifest, error) {
 	if chunkSize <= 0 {
 		chunkSize = minSeedChunk
 	}
-	if algo == "" {
-		algo = algoSHA256
-	}
+	algo = cmp.Or(algo, algoSHA256)
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -107,9 +105,7 @@ func LoadManifest(path string) (*Manifest, error) {
 	if m.Version < 1 || m.Version > ManifestVersion {
 		return nil, fmt.Errorf("manifest: unsupported version %d", m.Version)
 	}
-	if m.Algo == "" {
-		m.Algo = algoSHA256
-	}
+	m.Algo = cmp.Or(m.Algo, algoSHA256)
 	// Validate chunk geometry: discard any chunk where End < Start.
 	// A corrupt manifest with inverted ranges would cause integer
 	// underflow in VerifyFull, leading to near-infinite read loops.
