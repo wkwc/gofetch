@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestAllocateFileWriter(t *testing.T) {
@@ -230,4 +231,43 @@ func TestValidateCACert(t *testing.T) {
 	if err := ValidateCACert(garbage); err == nil {
 		t.Error("expected error for a file with no certificates")
 	}
+}
+
+// TestWorkersUsedReflectsActualPath pins that the reported worker count
+// is the concurrency actually used: 1 for the single-stream fallback
+// (tiny files), autoConfig.Workers for range mode — never the plan
+// when the plan wasn't run.
+func TestWorkersUsedReflectsActualPath(t *testing.T) {
+	t.Run("tiny file uses one worker", func(t *testing.T) {
+		payload := makePayload(1024)
+		srv := newRangeServer(t, payload, nil)
+		out := filepath.Join(t.TempDir(), "small.bin")
+		d := NewDownloader(srv.URL, out, Options{Quiet: true, NoResume: true})
+		if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+		if d.workersUsed != 1 {
+			t.Errorf("workersUsed = %d, want 1 (single-stream fallback)", d.workersUsed)
+		}
+		got, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(payload) {
+			t.Fatalf("got %d bytes, want %d", len(got), len(payload))
+		}
+	})
+
+	t.Run("large file uses range workers", func(t *testing.T) {
+		payload := makePayload(2 << 20)
+		srv := newRangeServer(t, payload, nil)
+		out := filepath.Join(t.TempDir(), "big.bin")
+		d := NewDownloader(srv.URL, out, Options{Quiet: true, NoResume: true})
+		if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+		if d.workersUsed != d.autoConfig.Workers {
+			t.Errorf("workersUsed = %d, want autoConfig.Workers %d", d.workersUsed, d.autoConfig.Workers)
+		}
+	})
 }

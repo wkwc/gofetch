@@ -454,7 +454,7 @@ func TestFinalizeClearsOnNoManifestHashFailure(t *testing.T) {
 	}
 }
 
-func TestClearResumeRejectsSymlink(t *testing.T) {
+func TestClearResumeRemovesLinkOnly(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real")
 	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
@@ -464,12 +464,17 @@ func TestClearResumeRejectsSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlinks unsupported: %v", err)
 	}
-	if err := clearResume(link); err == nil {
-		t.Fatal("expected clearResume to refuse a symlink")
+	// unlink(2) never follows a trailing symlink: clearing must remove
+	// the link itself while leaving the target byte-identical.
+	if err := clearResume(link); err != nil {
+		t.Fatalf("clearResume(link) = %v, want nil", err)
 	}
-	// Target must be untouched.
-	if _, err := os.Stat(target); err != nil {
-		t.Errorf("symlink target was removed: %v", err)
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("link still present: %v", err)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "x" {
+		t.Fatalf("target disturbed: content=%q err=%v", got, err)
 	}
 }
 

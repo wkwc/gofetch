@@ -77,3 +77,33 @@ func TestProbeDecisionMatrix(t *testing.T) {
 		})
 	}
 }
+
+// TestProbeWorkersMatchActualPath pins that ProbeURL reports the worker
+// count a download would actually use: 1 for tiny files (single-stream
+// fallback), the auto-tuned count otherwise.
+func TestProbeWorkersMatchActualPath(t *testing.T) {
+	t.Run("tiny file probes one worker", func(t *testing.T) {
+		srv := newRangeServer(t, makePayload(1024), nil)
+		p, err := ProbeURL(testCtx(t, 10*time.Second), srv.URL)
+		if err != nil {
+			t.Fatalf("ProbeURL: %v", err)
+		}
+		if p.Workers != 1 {
+			t.Errorf("Workers = %d, want 1 (single-stream fallback)", p.Workers)
+		}
+	})
+
+	t.Run("large file probes range workers", func(t *testing.T) {
+		srv := newRangeServer(t, makePayload(4<<20), nil)
+		p, err := ProbeURL(testCtx(t, 10*time.Second), srv.URL)
+		if err != nil {
+			t.Fatalf("ProbeURL: %v", err)
+		}
+		if p.Workers <= 1 {
+			t.Errorf("Workers = %d, want auto-tuned range count > 1", p.Workers)
+		}
+		if !p.SupportsRanges {
+			t.Error("want SupportsRanges for a range-capable server")
+		}
+	})
+}

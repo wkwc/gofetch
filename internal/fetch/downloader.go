@@ -32,6 +32,11 @@ type Downloader struct {
 	resumePath   string
 	manifest     *Manifest
 	startTime    time.Time
+	// workersUsed records the concurrency the last download actually
+	// ran with (1 for the single-stream fallback, autoConfig.Workers
+	// for range mode) so the summary and --info report truth, not the
+	// auto-tuned plan. 0 means no download ran yet.
+	workersUsed int
 
 	headers   []string
 	userAgent string
@@ -218,8 +223,8 @@ type ProbeInfo struct {
 }
 
 // ProbeURL probes url (HEAD, falling back to a 1-byte range GET) and
-// reports the announced size, range support, and the auto-tuned
-// concurrency a download would use — without writing anything to disk.
+// reports the announced size, range support, and the concurrency a
+// download would actually use — without writing anything to disk.
 func ProbeURL(ctx context.Context, rawURL string) (ProbeInfo, error) {
 	d := NewDownloader(rawURL, "", Options{})
 	info, err := d.probeURL(ctx, rawURL)
@@ -227,11 +232,15 @@ func ProbeURL(ctx context.Context, rawURL string) (ProbeInfo, error) {
 		return ProbeInfo{}, err
 	}
 	d.applyProbe(info)
+	workers := d.autoConfig.Workers
+	if usesSingleStream(info) {
+		workers = 1
+	}
 	return ProbeInfo{
 		URL:            rawURL,
 		Total:          info.total,
 		SupportsRanges: info.supportsRanges,
-		Workers:        d.autoConfig.Workers,
+		Workers:        workers,
 		BufSize:        d.autoConfig.BufSize,
 	}, nil
 }
@@ -443,6 +452,15 @@ func (d *Downloader) resolveResume(activeURL string, total int64) []Task {
 	return completed
 }
 
+// usesSingleStream reports whether a probe leads to the single-stream
+// fallback: the server lacks range support, or the file is so small
+// (< 64 KiB) that parallel overhead dominates. Shared by the download
+// dispatch and ProbeURL so --info reports the worker count a download
+// would actually use, not just the auto-tuned plan.
+func usesSingleStream(info probeInfo) bool {
+	return !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold)
+}
+
 // downloadFromMirror attempts to download from a single URL using either
 // range or single-stream mode.
 func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, info probeInfo, completed []Task, f fileWriter) error {
@@ -450,7 +468,7 @@ func (d *Downloader) downloadFromMirror(ctx context.Context, activeURL string, i
 	// paths (previously only rangeDownload loaded it).
 	d.loadManifestIfPresent()
 
-	if !info.supportsRanges || (info.total > 0 && info.total < smallFileThreshold) {
+	if usesSingleStream(info) {
 		return d.singleDownload(ctx, activeURL, info.total, completed, f)
 	}
 	err := d.rangeDownload(ctx, activeURL, info.total, completed, f)

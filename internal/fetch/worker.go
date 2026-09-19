@@ -319,21 +319,11 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 
 		// Rangeable downloads do not negotiate compression; if a server
 		// still sends Content-Encoding we reject rather than corrupt the file.
-		if enc := resp.Header.Get("Content-Encoding"); !isIdentity(enc) {
+		// Content-Range must match the requested task so a CDN cannot hand
+		// us a different slice written at task.Start.
+		if err := checkRangeResponse(resp.Header, task); err != nil {
 			drainAndClose(resp.Body)
-			return fmt.Errorf("range %d-%d: unexpected Content-Encoding %q", task.Start, task.End, enc)
-		}
-		// Require Content-Range to match the requested task so a CDN
-		// cannot hand us a different slice written at task.Start.
-		cr := resp.Header.Get("Content-Range")
-		if cr == "" {
-			drainAndClose(resp.Body)
-			return fmt.Errorf("range %d-%d: 206 missing Content-Range", task.Start, task.End)
-		}
-		start, end, _, ok := parseContentRange(cr)
-		if !ok || start != task.Start || end != task.End {
-			drainAndClose(resp.Body)
-			return fmt.Errorf("range %d-%d: Content-Range mismatch %q", task.Start, task.End, cr)
+			return err
 		}
 		return d.readBody(rctx, task, f, ws, resp.Body)
 	}
@@ -343,6 +333,27 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 	}
 	return fmt.Errorf("range %d-%d: exhausted retries on retryable HTTP status with no last error (invariant violation)",
 		task.Start, task.End)
+}
+
+// checkRangeResponse validates 206 headers for task before the body is
+// pumped: compressed bodies would desync Range past-the-end math, and a
+// Content-Range that doesn't match the requested task means a CDN (or
+// proxy) handed us a different slice than the one we'd write at
+// task.Start. Takes only the header (that's all it inspects), so tests
+// need no response bodies. The caller drains the body on error.
+func checkRangeResponse(h http.Header, task Task) error {
+	if enc := h.Get("Content-Encoding"); !isIdentity(enc) {
+		return fmt.Errorf("range %d-%d: unexpected Content-Encoding %q", task.Start, task.End, enc)
+	}
+	cr := h.Get("Content-Range")
+	if cr == "" {
+		return fmt.Errorf("range %d-%d: 206 missing Content-Range", task.Start, task.End)
+	}
+	start, end, _, ok := parseContentRange(cr)
+	if !ok || start != task.Start || end != task.End {
+		return fmt.Errorf("range %d-%d: Content-Range mismatch %q", task.Start, task.End, cr)
+	}
+	return nil
 }
 
 // sleepCtx sleeps for d, returning false if ctx is cancelled first.

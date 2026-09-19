@@ -116,11 +116,18 @@ func (d *Downloader) finalize(f fileWriter, prog *progress) (err error) {
 		speed = float64(done) / elapsed.Seconds()
 	}
 
+	// Report the concurrency actually used (single-stream fallback runs
+	// one worker even when the auto-tuned plan said more).
+	workers := d.workersUsed
+	if workers <= 0 {
+		workers = d.autoConfig.Workers
+	}
+
 	fmt.Fprintln(os.Stderr, "\n  download complete")
 	fmt.Fprintf(os.Stderr, "  bytes:   %s\n", HumanBytes(done))
 	fmt.Fprintf(os.Stderr, "  time:    %s\n", formatDuration(elapsed))
 	fmt.Fprintf(os.Stderr, "  speed:   %s/s\n", HumanBytes(int64(speed)))
-	fmt.Fprintf(os.Stderr, "  workers: %d\n", d.autoConfig.Workers)
+	fmt.Fprintf(os.Stderr, "  workers: %d\n", workers)
 
 	return nil
 }

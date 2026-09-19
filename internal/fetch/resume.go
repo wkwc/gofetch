@@ -3,7 +3,6 @@ package fetch
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -172,23 +171,22 @@ func loadResume(path, url string, totalSize int64) (*ResumeState, error) {
 }
 
 // clearResume removes the resume state file. No-op if path is empty.
-// Rejects symlinks to prevent attacker from deleting arbitrary files
-// via a pre-placed symlink at the resume path.
+//
+// No symlink check is needed here (unlike openOutputFile): unlink(2)
+// never follows a trailing symlink — removing the sidecar path deletes
+// the link itself, never its target (opening for write is what follows
+// links, which is why output files need O_NOFOLLOW).
 func clearResume(path string) error {
 	if path == "" {
 		return nil
 	}
-	info, err := os.Lstat(path)
-	if err != nil {
+	if err := os.Remove(path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to remove symlink at %s", path)
-	}
-	return os.Remove(path)
+	return nil
 }
 
 // dedupTasks merges overlapping or adjacent completed ranges and sorts

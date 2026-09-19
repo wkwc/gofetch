@@ -14,6 +14,9 @@ import (
 // the caller threads progress through finalize() at the end. There is no
 // parallel work to monitor, so no worker states are created on this path.
 func (d *Downloader) singleDownload(ctx context.Context, url string, total int64, completed []Task, f fileWriter) error {
+	// Single worker by construction; recorded so the summary reports
+	// truth (not the auto-tuned range-mode plan).
+	d.workersUsed = 1
 	// Match range path: never accept compressed bodies that would
 	// desync Content-Length / integrity checks (transport also disables
 	// transparent gzip, but proxies can still inject encoding).

@@ -228,17 +228,25 @@ func usage(fs *flag.FlagSet) {
 	fmt.Fprintln(os.Stderr, "note: -h is the integrity-hash flag; use -help for this help")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "examples:")
-	fmt.Fprintln(os.Stderr, "  gofetch https://example.com/file.bin")
-	fmt.Fprintln(os.Stderr, "  gofetch -o out.bin https://example.com/file.bin")
-	fmt.Fprintln(os.Stderr, "  gofetch -o ~/Downloads https://example.com/file.bin     # existing dir")
-	fmt.Fprintln(os.Stderr, "  gofetch -o ~/Downloads url1 url2 url3                   # multiple files")
-	fmt.Fprintln(os.Stderr, "  gofetch --info https://example.com/file.bin             # probe, no download")
-	fmt.Fprintln(os.Stderr, "  gofetch -H 'Authorization: Bearer token' -o out.bin https://example.com/file.bin")
-	fmt.Fprintln(os.Stderr, "  gofetch --limit-rate 2M -o out.bin https://example.com/file.bin")
-	fmt.Fprintln(os.Stderr, "  gofetch -x 16 --buf-size 256k -o out.bin https://example.com/file.bin")
-	fmt.Fprintln(os.Stderr, "  gofetch --no-clobber -o out.bin https://example.com/file.bin  # skip if exists")
-	fmt.Fprintln(os.Stderr, "  gofetch --ca-cert ca.pem -o out.bin https://mirror.example.com/f.bin  # private CA")
-	fmt.Fprintln(os.Stderr, "  gofetch -h auto https://example.com/file.bin")
-	fmt.Fprintln(os.Stderr, "  gofetch -m mirror1,mirror2 https://primary.com/file.bin")
-	fmt.Fprintln(os.Stderr, "  gofetch --allow-loopback -o out.bin http://127.0.0.1:9120/  # local benchserver")
+	for _, ex := range usageExamples {
+		fmt.Fprintln(os.Stderr, ex)
+	}
+}
+
+// usageExamples is the -help example list as data, so adding an example
+// can't desync the help text (each entry is one full output line).
+var usageExamples = []string{
+	"  gofetch https://example.com/file.bin",
+	"  gofetch -o out.bin https://example.com/file.bin",
+	"  gofetch -o ~/Downloads https://example.com/file.bin     # existing dir",
+	"  gofetch -o ~/Downloads url1 url2 url3                   # multiple files",
+	"  gofetch --info https://example.com/file.bin             # probe, no download",
+	"  gofetch -H 'Authorization: Bearer token' -o out.bin https://example.com/file.bin",
+	"  gofetch --limit-rate 2M -o out.bin https://example.com/file.bin",
+	"  gofetch -x 16 --buf-size 256k -o out.bin https://example.com/file.bin",
+	"  gofetch --no-clobber -o out.bin https://example.com/file.bin  # skip if exists",
+	"  gofetch --ca-cert ca.pem -o out.bin https://mirror.example.com/f.bin  # private CA",
+	"  gofetch -h auto https://example.com/file.bin",
+	"  gofetch -m mirror1,mirror2 https://primary.com/file.bin",
+	"  gofetch --allow-loopback -o out.bin http://127.0.0.1:9120/  # local benchserver",
 }

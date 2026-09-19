@@ -157,8 +157,9 @@ func (m *mmapWriter) Truncate(_ int64) error {
 func allocateFileWriter(path string, size int64, resume, noMmap bool) (fileWriter, error) {
 	// Refuse to write the output through a symlink: with attacker- or
 	// operator-supplied URLs, a pre-placed symlink at the output path
-	// could redirect writes into an arbitrary file. Same guard clearResume
-	// applies to sidecars. Intermediate directories are not checked.
+	// could redirect writes into an arbitrary file (open-for-write
+	// follows links, unlike unlink — so sidecar deletion needs no
+	// equivalent guard). Intermediate directories are not checked.
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("refusing to write output through symlink %q", path)
 	}

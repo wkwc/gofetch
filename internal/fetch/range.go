@@ -24,27 +24,11 @@ func seedResumeBytes(prog *progress, completed []Task) {
 	}
 }
 
-// rangeDownload fans the file out across N workers with a stealing monitor.
-// It seeds the work queue from ~1 MiB chunks of the uncompleted gaps,
-// runs workers until the queue drains, and signals completion.
-// The file writer f is managed by the caller (already open, will be closed by caller).
-func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64, completed []Task, f fileWriter) error {
-	if total <= 0 {
-		// Ranges with unknown size cannot seed tasks safely — fall back
-		// to single-stream rather than "succeeding" with an empty file.
-		// No worker states exist here: there's no parallel work to monitor
-		// and resume has no per-range byte counts to persist.
-		return d.singleDownload(ctx, url, total, completed, f)
-	}
-
-	states := make([]*workerState, d.autoConfig.Workers)
-	for i := range states {
-		states[i] = newWorkerState()
-	}
-
-	prog := newProgress(total, states)
-	seedResumeBytes(prog, completed)
-
+// seedQueue splits the uncompleted gaps of [0, total) into ~1 MiB tasks
+// and returns them in a FIFO work queue. Pure function of its inputs
+// (no Downloader state), so the coverage invariant is unit-testable:
+// the seeded tasks must exactly cover every uncompleted byte, once.
+func seedQueue(total int64, completed []Task) *Queue {
 	// Adaptive chunk size: prefer 1 MiB, but grow so the seed task count
 	// stays ≤ maxSeedTasks even for multi-TiB / hostile Content-Length.
 	// splitRange also enforces the bound as defense in depth.
@@ -65,6 +49,97 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 	// Unbounded queue: steal/retry must never drop or livelock at a cap.
 	queue := NewQueue(len(seeds), 0)
 	queue.PushMany(seeds)
+	return queue
+}
+
+// firstWorkerError returns the first worker failure. When skipCancel is
+// true, context cancellations (steal signals, Ctrl-C propagation) don't
+// count — only real failures like Content-Range mismatches do.
+func firstWorkerError(states []*workerState, skipCancel bool) (error, bool) {
+	for _, ws := range states {
+		if err, ok := ws.err(); ok && err != nil {
+			if skipCancel && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				continue
+			}
+			return err, true
+		}
+	}
+	return nil, false
+}
+
+// allTasksDone reports whether every byte was written: the queue drained
+// and no worker recorded a real (non-cancellation) failure.
+func allTasksDone(ctx context.Context, states []*workerState, queue *Queue) bool {
+	// The file is complete if the queue is empty (every task processed)
+	// even when the context fired during the final tasks; a non-empty
+	// queue means a signal interrupted real work.
+	fully := ctx.Err() == nil
+	if !fully && queue.Len() == 0 {
+		fully = true
+	}
+	// A real worker error (a non-cancellation failure such as a
+	// Content-Range mismatch) means the download failed even if the
+	// queue drained. The cancellation signal itself is not a failure.
+	if _, bad := firstWorkerError(states, true); bad {
+		fully = false
+	}
+	return fully
+}
+
+// failAll records err on every worker state so the supervisor reports it.
+func failAll(states []*workerState, err error) {
+	for _, ws := range states {
+		ws.setErr(err)
+	}
+}
+
+// drainLeftovers runs any tasks still queued after the workers drained
+// (the probe lied about ranges, say) serially on the calling goroutine.
+// Failures are published to every worker state so the supervisor reports
+// them. Returns false when a leftover failed.
+func (d *Downloader) drainLeftovers(ctx context.Context, url string, states []*workerState, queue *Queue, f fileWriter) bool {
+	for {
+		task, ok := queue.Pop()
+		if !ok {
+			return true
+		}
+		if err := d.runTask(ctx, url, nil, task, f); err != nil {
+			failAll(states, err)
+			return false
+		}
+		if d.manifest != nil {
+			if err := d.verifyTaskRange(task, f); err != nil {
+				failAll(states, err)
+				return false
+			}
+		}
+		d.recordCompleted(task)
+	}
+}
+
+// rangeDownload fans the file out across N workers with a stealing monitor.
+// It seeds the work queue from ~1 MiB chunks of the uncompleted gaps,
+// runs workers until the queue drains, and signals completion.
+// The file writer f is managed by the caller (already open, will be closed by caller).
+func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64, completed []Task, f fileWriter) error {
+	if total <= 0 {
+		// Ranges with unknown size cannot seed tasks safely — fall back
+		// to single-stream rather than "succeeding" with an empty file.
+		// No worker states exist here: there's no parallel work to monitor
+		// and resume has no per-range byte counts to persist.
+		return d.singleDownload(ctx, url, total, completed, f)
+	}
+
+	d.workersUsed = d.autoConfig.Workers
+	states := make([]*workerState, d.autoConfig.Workers)
+	for i := range states {
+		states[i] = newWorkerState()
+	}
+
+	prog := newProgress(total, states)
+	seedResumeBytes(prog, completed)
+
+	queue := seedQueue(total, completed)
 
 	var workers sync.WaitGroup
 	workers.Add(d.autoConfig.Workers)
@@ -121,48 +196,10 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 		workers.Wait()
 		stopMonitor()
 		monitorWG.Wait()
-		// All workers finished. The file is complete if the queue is empty
-		// (every task processed) even when the context fired during the final
-		// tasks; a non-empty queue means a signal interrupted real work.
-		fully := ctx.Err() == nil
-		if !fully && queue.Len() == 0 {
-			fully = true
-		}
-		// A real worker error (a non-cancellation failure such as a
-		// Content-Range mismatch) means the download failed even if the
-		// queue drained. The cancellation signal itself is not a failure.
-		for _, ws := range states {
-			if err, ok := ws.err(); ok && err != nil &&
-				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				fully = false
-				break
-			}
-		}
+		fully := allTasksDone(ctx, states, queue)
 		if fully {
 			// Serial drain of any leftover (probe lied about ranges etc).
-			for {
-				task, ok := queue.Pop()
-				if !ok {
-					break
-				}
-				if err := d.runTask(ctx, url, nil, task, f); err != nil {
-					for _, ws := range states {
-						ws.setErr(err)
-					}
-					fully = false
-					break
-				}
-				if d.manifest != nil {
-					if err := d.verifyTaskRange(task, f); err != nil {
-						for _, ws := range states {
-							ws.setErr(err)
-						}
-						fully = false
-						break
-					}
-				}
-				d.recordCompleted(task)
-			}
+			fully = d.drainLeftovers(ctx, url, states, queue, f)
 		}
 		if saveC != nil {
 			close(saveC)
@@ -192,10 +229,8 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 			if fully {
 				return nil
 			}
-			for _, ws := range states {
-				if err, ok := ws.err(); ok && err != nil {
-					return err
-				}
+			if err, ok := firstWorkerError(states, false); ok {
+				return err
 			}
 			return ctx.Err()
 		case <-saveC:

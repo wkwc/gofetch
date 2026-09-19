@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -408,5 +409,51 @@ func TestStealPlanClaimsOnce(t *testing.T) {
 
 	if _, _, ok := ws.stealPlan(now); ok {
 		t.Error("stealPlan must not claim a cancel fn twice")
+	}
+}
+
+// TestCheckRangeResponse pins the 206 guards with synthetic responses:
+// compressed bodies and Content-Range mismatches must fail before any
+// byte is pumped, exact matches must pass.
+func TestCheckRangeResponse(t *testing.T) {
+	task := Task{Start: 100, End: 199}
+	hdr := func(enc, cr string) http.Header {
+		h := http.Header{}
+		if enc != "" {
+			h.Set("Content-Encoding", enc)
+		}
+		if cr != "" {
+			h.Set("Content-Range", cr)
+		}
+		return h
+	}
+	cases := []struct {
+		name    string
+		enc     string
+		cr      string
+		wantErr string
+	}{
+		{"exact match", "identity", "bytes 100-199/1000", ""},
+		{"no encoding header", "", "bytes 100-199/1000", ""},
+		{"gzip rejected", "gzip", "bytes 100-199/1000", "Content-Encoding"},
+		{"br rejected", "br", "bytes 100-199/1000", "Content-Encoding"},
+		{"missing content-range", "identity", "", "missing Content-Range"},
+		{"shifted slice", "identity", "bytes 0-99/1000", "mismatch"},
+		{"wrong end", "identity", "bytes 100-299/1000", "mismatch"},
+		{"malformed", "identity", "bytes nonsense", "mismatch"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkRangeResponse(hdr(tt.enc, tt.cr), task)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want nil, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("want error containing %q, got %v", tt.wantErr, err)
+			}
+		})
 	}
 }

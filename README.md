@@ -312,10 +312,10 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 
 ## Tested
 
-- Go 1.26, Linux/amd64
+- Go 1.26+ (CI pins 1.27.1), Linux/amd64
 - Verified byte-equality against `proof.ovh.net/files/10Mb.dat` (10 MiB) and `100Mb.dat` (100 MiB) — MD5/SHA256 match.
 - `go vet`, `gofmt`, `gofumpt`, `go build` clean; race detector and `staticcheck` clean.
-- 200+ tests pass under `-race -shuffle=on` (plus 41 black-box smoke checks):
+- 210+ tests pass under `-race -shuffle=on` (plus 41 black-box smoke checks):
   differential range-algebra tests against brute-force oracles, and chaos tests
   that truncate/reset/mislabel server responses — byte-perfect output or clean
   failure, never silent corruption.
