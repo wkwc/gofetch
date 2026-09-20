@@ -313,6 +313,7 @@ A workflow at `.github/workflows/ci.yml` lints, tests, and builds on every push 
 ## Tested
 
 - Go 1.27 (CI pins 1.27.1), Linux/amd64
+- Release targets (`linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, `windows/amd64`) cross-compile clean; Linux/amd64 is the fully tested platform.
 - Verified byte-equality against `proof.ovh.net/files/10Mb.dat` (10 MiB) and `100Mb.dat` (100 MiB) — MD5/SHA256 match.
 - `go vet`, `gofmt`, `gofumpt`, `go build` clean; race detector and `staticcheck` clean.
 - 210+ tests pass under `-race -shuffle=on` (plus 41 black-box smoke checks):
