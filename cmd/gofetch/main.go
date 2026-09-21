@@ -34,6 +34,37 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// parseArgs parses args with interspersed flags and positionals: Go's
+// flag package stops at the first positional, so the natural
+// `gofetch URL -m mirror` would treat -m as a positional and fail with
+// "invalid URL: -m". Re-parse the remainder after each positional so
+// flags work in any order (like curl/aria2c/wget). A standalone "--"
+// ends flag parsing: everything after is positional by convention
+// (split there once — Parse would otherwise consume a mid-args "--"
+// and the re-parse loop would treat the rest as flags). Returns the
+// positional arguments (URLs).
+func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	flagsPart, postDashes := args, []string(nil)
+	for i, a := range args {
+		if a == "--" {
+			flagsPart, postDashes = args[:i], args[i+1:]
+			break
+		}
+	}
+	var urls []string
+	rest := flagsPart
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return append(urls, postDashes...), nil
+		}
+		urls = append(urls, fs.Args()[0])
+		rest = fs.Args()[1:]
+	}
+}
+
 // headerList accumulates repeatable -H/--header flags.
 type headerList []string
 
@@ -76,7 +107,8 @@ func run(args []string) int {
 	fs.IntVar(&cfg.workers, "workers", 0, "override auto-tuned worker count (0 = auto)")
 	fs.Usage = func() { usage(fs) }
 
-	if err := fs.Parse(args); err != nil {
+	rawURLs, err := parseArgs(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
@@ -89,7 +121,7 @@ func run(args []string) int {
 		fmt.Printf("gofetch %s (go %s)\n", version, runtime.Version())
 		return 0
 	}
-	if fs.NArg() == 0 {
+	if len(rawURLs) == 0 {
 		fs.Usage()
 		return 2
 	}
@@ -105,14 +137,12 @@ func run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
-	var err error
 	if cfg, err = resolveConfig(ctx, cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "gofetch:", err)
 		return 1
 	}
 
-	rawURLs := fs.Args()
-	// Validate every URL up front (all-or-nothing), like the old CLI.
+	// rawURLs: positional args, collected with interspersed-flag parsing.
 	for _, u := range rawURLs {
 		if err := validateURL(ctx, u); err != nil {
 			fmt.Fprintln(os.Stderr, "gofetch:", err)

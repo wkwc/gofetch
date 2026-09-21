@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"flag"
 	"io"
 	"math/rand/v2"
 	"net/http"
@@ -912,4 +913,81 @@ func TestCLISoakVariedFlags(t *testing.T) {
 			t.Fatalf("iter %d: content mismatch (%d bytes)", i, len(got))
 		}
 	}
+}
+
+// TestParseArgsInterspersed pins interspersed-flag parsing: flags after
+// positional URLs must parse (the natural `gofetch URL -m mirror` order,
+// like curl/aria2c/wget), plus the "--" convention and mixed orders.
+func TestParseArgsInterspersed(t *testing.T) {
+	newFS := func() (*flag.FlagSet, *headerList, *string) {
+		fs := flag.NewFlagSet("gofetch", flag.ContinueOnError)
+		var h headerList
+		fs.Var(&h, "m", "mirrors")
+		var out string
+		fs.StringVar(&out, "o", "", "output")
+		return fs, &h, &out
+	}
+
+	t.Run("flags after positionals", func(t *testing.T) {
+		fs, h, out := newFS()
+		urls, err := parseArgs(fs, []string{"-o", "o.bin", "https://a/x", "-m", "https://m1,https://m2"})
+		if err != nil {
+			t.Fatalf("parseArgs: %v", err)
+		}
+		if len(urls) != 1 || urls[0] != "https://a/x" {
+			t.Errorf("urls = %v, want [https://a/x]", urls)
+		}
+		if *out != "o.bin" {
+			t.Errorf("out = %q, want o.bin", *out)
+		}
+		if len(*h) != 1 || (*h)[0] != "https://m1,https://m2" {
+			t.Errorf("mirrors = %v, want [https://m1,https://m2]", *h)
+		}
+	})
+
+	t.Run("multiple positionals interleaved", func(t *testing.T) {
+		fs, _, _ := newFS()
+		urls, err := parseArgs(fs, []string{"https://a/x", "-o", "d", "https://b/y"})
+		if err != nil {
+			t.Fatalf("parseArgs: %v", err)
+		}
+		if len(urls) != 2 || urls[0] != "https://a/x" || urls[1] != "https://b/y" {
+			t.Errorf("urls = %v, want both in order", urls)
+		}
+	})
+
+	t.Run("double dash ends flag parsing", func(t *testing.T) {
+		fs, h, _ := newFS()
+		urls, err := parseArgs(fs, []string{"-o", "o.bin", "--", "https://a/x", "-m", "not-a-flag"})
+		if err != nil {
+			t.Fatalf("parseArgs: %v", err)
+		}
+		if len(urls) != 3 || urls[0] != "https://a/x" || urls[1] != "-m" || urls[2] != "not-a-flag" {
+			t.Errorf("urls = %v, want post--- tokens as separate positionals", urls)
+		}
+		if len(*h) != 0 {
+			t.Errorf("mirrors parsed after --: %v", *h)
+		}
+	})
+
+	t.Run("flags only", func(t *testing.T) {
+		fs, _, out := newFS()
+		urls, err := parseArgs(fs, []string{"-o", "o.bin"})
+		if err != nil {
+			t.Fatalf("parseArgs: %v", err)
+		}
+		if len(urls) != 0 {
+			t.Errorf("urls = %v, want empty", urls)
+		}
+		if *out != "o.bin" {
+			t.Errorf("out = %q, want o.bin", *out)
+		}
+	})
+
+	t.Run("unknown flag still errors", func(t *testing.T) {
+		fs, _, _ := newFS()
+		if _, err := parseArgs(fs, []string{"https://a/x", "-bogus"}); err == nil {
+			t.Error("unknown flag after positional must error")
+		}
+	})
 }
