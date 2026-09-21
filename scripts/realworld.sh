@@ -56,17 +56,27 @@ command -v md5sum >/dev/null 2>&1 || skip "md5sum missing"
 
 PROOF=https://proof.ovh.net/files
 ARXIV=https://arxiv.org/pdf/1603.05705
+# Second mirror class (healthy fast Apache mirror with a sha256sums.txt
+# container): the interrupt/resume tests fall back to it when proof.ovh
+# throttles, so one hostile mirror never blanks the battery.
+ARCH_TARBALL=https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst
+ARCH_SIZE=126491574
 
 echo ""
 echo "== 1. README claim: proof.ovh.net 10Mb.dat byte-equality =="
 if reachable "$PROOF/10Mb.dat"; then
-  curl -s "$PROOF/10Mb.dat" -o "$TMP/ref.bin"
-  SHA=$(sha256sum "$TMP/ref.bin" | cut -d' ' -f1)
-  t_retry "gofetch download + sha256 verify" 60 "$GOFETCH" -q -h "sha256:$SHA" -o "$TMP/gf.bin" "$PROOF/10Mb.dat"
-  if md5sum "$TMP/ref.bin" "$TMP/gf.bin" | awk '{print $1}' | sort -u | wc -l | grep -q '^1$'; then
-    ok "output byte-identical to reference"
+  # Reference fetches are verified complete (rc + non-empty) everywhere:
+  # a partial curl would make the byte-equality check falsely fail.
+  if curl -fsSL "$PROOF/10Mb.dat" -o "$TMP/ref.bin" 2>/dev/null && [ -s "$TMP/ref.bin" ]; then
+    SHA=$(sha256sum "$TMP/ref.bin" | cut -d' ' -f1)
+    t_retry "gofetch download + sha256 verify" 60 "$GOFETCH" -q -h "sha256:$SHA" -o "$TMP/gf.bin" "$PROOF/10Mb.dat"
+    if md5sum "$TMP/ref.bin" "$TMP/gf.bin" | awk '{print $1}' | sort -u | wc -l | grep -q '^1$'; then
+      ok "output byte-identical to reference"
+    else
+      bad "output differs from reference"
+    fi
   else
-    bad "output differs from reference"
+    skip "proof.ovh.net reference fetch failed (flaky upstream)"
   fi
 else
   skip "proof.ovh.net unreachable"
@@ -86,8 +96,12 @@ echo ""
 echo "== 3. redirect chain (httpbin -> proof.ovh.net) =="
 RB="https://httpbin.org/redirect-to?url=$PROOF/10Mb.dat"
 if reachable "$RB" 20; then
-  SHA=$(curl -sL "$PROOF/10Mb.dat" | sha256sum | cut -d' ' -f1)
-  t_retry "gofetch follows 302 and verifies" 60 "$GOFETCH" -q -h "sha256:$SHA" -o "$TMP/redir.bin" "$RB"
+  if curl -fsSL "$PROOF/10Mb.dat" -o "$TMP/redir-ref.bin" 2>/dev/null && [ -s "$TMP/redir-ref.bin" ]; then
+    SHA=$(sha256sum "$TMP/redir-ref.bin" | cut -d' ' -f1)
+    t_retry "gofetch follows 302 and verifies" 60 "$GOFETCH" -q -h "sha256:$SHA" -o "$TMP/redir.bin" "$RB"
+  else
+    skip "proof.ovh.net reference fetch failed (flaky upstream)"
+  fi
 else
   skip "httpbin unreachable"
 fi
@@ -95,8 +109,12 @@ fi
 echo ""
 echo "== 4. arXiv PDF over HTTPS (redirect) + md5 =="
 if reachable "$ARXIV"; then
-  MD5=$(curl -sL "$ARXIV" | md5sum | cut -d' ' -f1)
-  t_retry "gofetch arXiv PDF md5-verified" 60 "$GOFETCH" -q -h "md5:$MD5" -o "$TMP/paper.pdf" "$ARXIV"
+  if curl -fsSL "$ARXIV" -o "$TMP/paper-ref.pdf" 2>/dev/null && [ -s "$TMP/paper-ref.pdf" ]; then
+    MD5=$(md5sum "$TMP/paper-ref.pdf" | cut -d' ' -f1)
+    t_retry "gofetch arXiv PDF md5-verified" 60 "$GOFETCH" -q -h "md5:$MD5" -o "$TMP/paper.pdf" "$ARXIV"
+  else
+    skip "arxiv reference fetch failed (flaky upstream)"
+  fi
 else
   skip "arxiv unreachable"
 fi
@@ -121,37 +139,41 @@ else
 fi
 
 echo ""
-echo "== 7. resume a real 100Mb download (interrupt -> resume) =="
-if reachable "$PROOF/100Mb.dat"; then
-  # Rate-cap so there is a guaranteed interrupt window, then stop as soon
-  # as a real chunk is on disk (robust to any network speed). Retry once
-  # for flaky upstreams; skip (not fail) if the network cannot sustain a
-  # partial download — the resume machinery is proven locally.
+echo "== 7. resume a real download (interrupt -> resume) =="
+# proof.ovh 100MB first; fall back to the Arch tarball when throttled.
+# The output file is SPARSE (full-size from byte 0), so file-size polling
+# can never detect a mid-transfer window; the interrupt is timed instead
+# (rate-capped so a fixed sleep lands mid-transfer).
+IR_URL="$PROOF/100Mb.dat"; IR_SIZE=104857600; IR_RATE=8M; IR_SLEEP=6; IR_RTO=240
+if ! reachable "$IR_URL" 20; then
+  IR_URL="$ARCH_TARBALL"; IR_SIZE="$ARCH_SIZE"; IR_RATE=4M; IR_SLEEP=3; IR_RTO=300
+fi
+if reachable "$IR_URL" 20; then
   PARTIAL=0
   for _ in 1 2; do
-    "$GOFETCH" -q --limit-rate 10M -o "$TMP/big.bin" "$PROOF/100Mb.dat" >/dev/null 2>&1 &
+    "$GOFETCH" -q --limit-rate "$IR_RATE" -o "$TMP/big.bin" "$IR_URL" >/dev/null 2>&1 &
     PID=$!
-    for _ in $(seq 1 180); do
-      SIZE=$(wc -c "$TMP/big.bin" 2>/dev/null || echo 0)
-      if [ "${SIZE:-0}" -ge 8388608 ]; then PARTIAL=1; break; fi
-      kill -0 "$PID" 2>/dev/null || break
-      sleep 0.5
-    done
+    sleep "$IR_SLEEP"
+    ALIVE=0
+    kill -0 "$PID" 2>/dev/null && ALIVE=1
     kill -INT "$PID" 2>/dev/null
     wait "$PID" 2>/dev/null
-    [ "$PARTIAL" = 1 ] && break
+    if [ "$ALIVE" = 1 ] && [ -e "$TMP/big.bin.gofetch.resume" ]; then
+      PARTIAL=1
+      break
+    fi
     rm -f "$TMP/big.bin" "$TMP/big.bin.gofetch.resume"
   done
-  if [ "$PARTIAL" = 1 ] && [ -e "$TMP/big.bin.gofetch.resume" ]; then
+  if [ "$PARTIAL" = 1 ]; then
     ok "interrupt left a resume sidecar"
-    t_retry "resume completes the real 100Mb file" 240 "$GOFETCH" -q -o "$TMP/big.bin" "$PROOF/100Mb.dat"
-    SIZE=$(wc -c "$TMP/big.bin" 2>/dev/null || echo 0)
-    [ "$SIZE" = "104857600" ] && ok "resumed file is exactly 100MB" || bad "resumed file size $SIZE, want 104857600"
+    t_retry "resume completes the real download" "$IR_RTO" "$GOFETCH" -q -o "$TMP/big.bin" "$IR_URL"
+    SIZE=$(wc -c < "$TMP/big.bin" 2>/dev/null || echo 0)
+    [ "$SIZE" = "$IR_SIZE" ] && ok "resumed file is exactly $IR_SIZE bytes" || bad "resumed file size $SIZE, want $IR_SIZE"
   else
     skip "network could not sustain a partial download (flaky upstream)"
   fi
 else
-  skip "proof.ovh.net 100Mb unreachable"
+  skip "no healthy mirror for the interrupt/resume test"
 fi
 
 echo ""
@@ -165,35 +187,43 @@ fi
 
 echo ""
 echo "== 10. multi-cycle interrupt/resume (sidecar accumulation) =="
+# 3 interrupt cycles against a rate-capped transfer: the sidecar must
+# accumulate (merge) completed ranges across abort/resume cycles, and
+# the final resume must produce the byte-exact file. The output file is
+# sparse (full-size from byte 0), so the interrupt is timed (rate cap
+# x sleep lands mid-transfer). Falls back to the Arch mirror when
+# proof.ovh throttles.
+MC_URL="$PROOF/10Mb.dat"; MC_RATE=1M; MC_SLEEP=3; MC_REF=""; MC_RTO=120
 if reachable "$PROOF/10Mb.dat"; then
-  # 3 interrupt cycles against a rate-capped transfer: the sidecar must
-  # accumulate (merge) completed ranges across abort/resume cycles, and
-  # the final resume must produce the byte-exact file.
-  SHA=$(curl -sL "$PROOF/10Mb.dat" | sha256sum | cut -d' ' -f1)
+  MC_REF=$(curl -sL "$PROOF/10Mb.dat" | sha256sum | cut -d' ' -f1)
+else
+  MC_URL="$ARCH_TARBALL"; MC_RATE=4M; MC_SLEEP=3; MC_RTO=300
+  MC_REF=$(curl -fsSL https://geo.mirror.pkgbuild.com/iso/latest/sha256sums.txt 2>/dev/null | awk '$2=="archlinux-bootstrap-x86_64.tar.zst" {print $1}')
+fi
+if [ -n "$MC_REF" ] && reachable "$MC_URL" 20; then
   CYCLES=0
   for _ in 1 2 3; do
-    "$GOFETCH" -q --limit-rate 2M -o "$TMP/mc.bin" "$PROOF/10Mb.dat" >/dev/null 2>&1 &
+    "$GOFETCH" -q --limit-rate "$MC_RATE" -o "$TMP/mc.bin" "$MC_URL" >/dev/null 2>&1 &
     PID=$!
-    for _ in $(seq 1 60); do
-      SIZE=$(wc -c "$TMP/mc.bin" 2>/dev/null || echo 0)
-      if [ "${SIZE:-0}" -ge 2097152 ]; then break; fi
-      kill -0 "$PID" 2>/dev/null || break
-      sleep 0.5
-    done
+    sleep "$MC_SLEEP"
+    ALIVE=0
+    kill -0 "$PID" 2>/dev/null && ALIVE=1
     kill -INT "$PID" 2>/dev/null
     wait "$PID" 2>/dev/null
-    [ -e "$TMP/mc.bin.gofetch.resume" ] && CYCLES=$((CYCLES + 1))
+    if [ "$ALIVE" = 1 ] && [ -e "$TMP/mc.bin.gofetch.resume" ]; then
+      CYCLES=$((CYCLES + 1))
+    fi
   done
   if [ "$CYCLES" -ge 2 ]; then
     ok "$CYCLES interrupt cycles each left a resume sidecar"
-    t_retry "resume completes after $CYCLES cycles" 120 "$GOFETCH" -q -o "$TMP/mc.bin" "$PROOF/10Mb.dat"
+    t_retry "resume completes after $CYCLES cycles" "$MC_RTO" "$GOFETCH" -q -o "$TMP/mc.bin" "$MC_URL"
     GOTSHA=$(sha256sum "$TMP/mc.bin" 2>/dev/null | cut -d' ' -f1)
-    [ "$GOTSHA" = "$SHA" ] && ok "multi-cycle resume is byte-identical" || bad "multi-cycle resume sha mismatch: $GOTSHA"
+    [ "$GOTSHA" = "$MC_REF" ] && ok "multi-cycle resume is byte-identical" || bad "multi-cycle resume sha mismatch: $GOTSHA"
   else
     skip "network could not sustain repeated partial downloads (flaky upstream)"
   fi
 else
-  skip "proof.ovh.net unreachable"
+  skip "no healthy mirror for the multi-cycle test"
 fi
 
 echo ""
@@ -201,12 +231,34 @@ echo "== 11. -h auto container checksum (real distro mirror) =="
 # Arch's ISO directory ships sha256sums.txt listing the bootstrap
 # tarball; -h auto must fetch the container, match the entry by
 # basename, and verify. -x 2 keeps the transfer gentle on the mirror.
-ARCH_TARBALL=https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst
 if reachable "$ARCH_TARBALL" 20; then
   t_retry "gofetch -h auto verifies via container checksum" 300 "$GOFETCH" -q -x 2 -h auto -o "$TMP/arch.tar.zst" "$ARCH_TARBALL"
   [ -s "$TMP/arch.tar.zst" ] && ok "container-verified output non-empty" || bad "container-verified output empty"
 else
   skip "arch mirror unreachable"
+fi
+
+echo ""
+echo "== 12. second CDN class (fast HTTP/2, byte-equality) =="
+# jsdelivr: a fast HTTP/2 CDN — different server class than proof.ovh
+# (Apache, sometimes throttled). gofetch must land at curl parity here
+# (the ETA-gated stealing + small-file worker floor make it so).
+JS=https://cdn.jsdelivr.net/npm/typescript@5.9.3/lib/typescript.js
+if reachable "$JS" 15; then
+  # Reference fetch must be verified complete (rc + non-empty): a
+  # partial curl would make the byte-equality check falsely fail.
+  if curl -fsSL "$JS" -o "$TMP/js-ref.js" 2>/dev/null && [ -s "$TMP/js-ref.js" ]; then
+    t_retry "gofetch downloads from jsdelivr" 60 "$GOFETCH" -q -o "$TMP/js-gf.js" "$JS"
+    if md5sum "$TMP/js-ref.js" "$TMP/js-gf.js" 2>/dev/null | awk '{print $1}' | sort -u | wc -l | grep -q '^1$'; then
+      ok "jsdelivr output byte-identical to reference"
+    else
+      bad "jsdelivr output differs from reference"
+    fi
+  else
+    skip "jsdelivr reference fetch failed (flaky upstream)"
+  fi
+else
+  skip "jsdelivr unreachable"
 fi
 
 if [ "${BENCH:-0}" = "1" ] && command -v aria2c >/dev/null 2>&1 && reachable "$PROOF/100Mb.dat"; then
