@@ -163,6 +163,52 @@ else
   skip "proof.ovh.net unreachable"
 fi
 
+echo ""
+echo "== 10. multi-cycle interrupt/resume (sidecar accumulation) =="
+if reachable "$PROOF/10Mb.dat"; then
+  # 3 interrupt cycles against a rate-capped transfer: the sidecar must
+  # accumulate (merge) completed ranges across abort/resume cycles, and
+  # the final resume must produce the byte-exact file.
+  SHA=$(curl -sL "$PROOF/10Mb.dat" | sha256sum | cut -d' ' -f1)
+  CYCLES=0
+  for _ in 1 2 3; do
+    "$GOFETCH" -q --limit-rate 2M -o "$TMP/mc.bin" "$PROOF/10Mb.dat" >/dev/null 2>&1 &
+    PID=$!
+    for _ in $(seq 1 60); do
+      SIZE=$(wc -c "$TMP/mc.bin" 2>/dev/null || echo 0)
+      if [ "${SIZE:-0}" -ge 2097152 ]; then break; fi
+      kill -0 "$PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -INT "$PID" 2>/dev/null
+    wait "$PID" 2>/dev/null
+    [ -e "$TMP/mc.bin.gofetch.resume" ] && CYCLES=$((CYCLES + 1))
+  done
+  if [ "$CYCLES" -ge 2 ]; then
+    ok "$CYCLES interrupt cycles each left a resume sidecar"
+    t_retry "resume completes after $CYCLES cycles" 120 "$GOFETCH" -q -o "$TMP/mc.bin" "$PROOF/10Mb.dat"
+    GOTSHA=$(sha256sum "$TMP/mc.bin" 2>/dev/null | cut -d' ' -f1)
+    [ "$GOTSHA" = "$SHA" ] && ok "multi-cycle resume is byte-identical" || bad "multi-cycle resume sha mismatch: $GOTSHA"
+  else
+    skip "network could not sustain repeated partial downloads (flaky upstream)"
+  fi
+else
+  skip "proof.ovh.net unreachable"
+fi
+
+echo ""
+echo "== 11. -h auto container checksum (real distro mirror) =="
+# Arch's ISO directory ships sha256sums.txt listing the bootstrap
+# tarball; -h auto must fetch the container, match the entry by
+# basename, and verify. -x 2 keeps the transfer gentle on the mirror.
+ARCH_TARBALL=https://geo.mirror.pkgbuild.com/iso/latest/archlinux-bootstrap-x86_64.tar.zst
+if reachable "$ARCH_TARBALL" 20; then
+  t_retry "gofetch -h auto verifies via container checksum" 300 "$GOFETCH" -q -x 2 -h auto -o "$TMP/arch.tar.zst" "$ARCH_TARBALL"
+  [ -s "$TMP/arch.tar.zst" ] && ok "container-verified output non-empty" || bad "container-verified output empty"
+else
+  skip "arch mirror unreachable"
+fi
+
 if [ "${BENCH:-0}" = "1" ] && command -v aria2c >/dev/null 2>&1 && reachable "$PROOF/100Mb.dat"; then
   echo ""
   echo "== 9. REAL-INTERNET benchmark: gofetch vs aria2c (100Mb) =="

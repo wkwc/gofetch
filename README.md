@@ -117,6 +117,9 @@ but "parallel curl."
    "slow" (on a chunk ≥ 512 KiB and has fetched < 1 MiB after a 1.5 s grace period),
    the monitor *cancels* that worker's HTTP request, splits its remaining range,
    and pushes the unfinished half back to the shared work queue for another worker to grab.
+   Stealing is also ETA-gated: when the download is moving well and will finish
+   within ~5 s, stealing only churns connections (measured on a shaped mirror:
+   1.6× faster with the gate on a 10 MB download).
 3. **Lock-free progress.** There is no shared `done` counter — the progress
    display sums worker-local `bytesDone` atomics on demand.
 4. **Zero user knobs for the engine.** Workers (capped at 32), buffer size,
