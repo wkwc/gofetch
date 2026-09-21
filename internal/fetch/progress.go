@@ -166,14 +166,19 @@ func (d *Downloader) printProgress(p *progress, final bool) {
 		}
 	}
 	speed, eta := p.speedAndETA(done)
+	// The live (TTY) bar shows the EWMA speed — it has tick history and
+	// is real. Only the final bar omits it (see below).
 	speedStr := HumanBytes(int64(speed)) + "/s"
 	etaStr := ""
 	if speed > 0 && !final {
 		etaStr = "  ETA " + formatDuration(eta)
 	}
 	if final {
-		line := fmt.Sprintf("  %s %5.1f%%  %s / %s  %s",
-			bar[:], pct*100, HumanBytes(done), HumanBytes(total), speedStr)
+		// No speed on the final bar: the success path prints it against a
+		// fresh progress tracker (no history → dt≈0 → always "0 B/s"),
+		// and the summary line right below computes the real average.
+		line := fmt.Sprintf("  %s %5.1f%%  %s / %s",
+			bar[:], pct*100, HumanBytes(done), HumanBytes(total))
 		if tty {
 			fmt.Fprintln(os.Stderr, "\r"+line+"\033[K")
 		} else {

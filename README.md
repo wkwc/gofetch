@@ -16,13 +16,13 @@ An opinionated concurrent HTTP downloader. Single binary, zero external dependen
 
 ```
 $ gofetch https://proof.ovh.net/files/10Mb.dat
-  ######################## 100.0%  10.0 MB / 10.0 MB  1.2 GB/s  ETA 0s
+  ######################## 100.0%  10.0 MB / 10.0 MB
 
   download complete
   bytes:   10.0 MB
-  time:    8ms
-  speed:   1.25 GB/s
-  workers: 16
+  time:    2.9s
+  speed:   3.4 MB/s
+  workers: 4
 ```
 
 ## Features
@@ -274,39 +274,55 @@ and interrupt/resume. Throughput comparisons live in `./scripts/bench_real.sh`.
 
 ### Loopback (synthetic)
 
-On a Linux 16-core box, loopback, 64 MB:
+On a Linux 16-core box, loopback, 64 MB (wall time; downloads complete):
 
 | Tool | Median (3 runs) |
 | ---- | --------------- |
-| `gofetch -q` | ~105 ms |
-| aria2c (`-x 16`) | ~480 ms |
-| aria2c (default) | ~550 ms |
+| `gofetch` (auto) | ~35 ms |
+| `gofetch -v` | ~37 ms |
+| aria2c (`-x 16`) | ~154 ms |
+| aria2c (default) | ~187 ms |
 
-### Real internet (1.5 GB Arch Linux ISO, ~42 ms RTT)
+### Real internet (1.6 GB Arch Linux ISO, home link)
 
-Same file, identical window per tool, measured on a live mirror
-(`./scripts/bench_real.sh`):
+Fixed 12 s window per tool (`./scripts/bench_real.sh`), measured by
+**allocated (`du`) bytes** — see the sparse-file measurement note below:
 
-| Tool | Throughput |
+| Tool | Actual throughput |
 | ---- | ---------- |
-| `gofetch` (auto) | up to ~305 MB/s |
-| aria2c (`-x 16 -s 16`) | ~286 MB/s |
-| aria2c (default) | ~8 MB/s |
-| `curl` (single stream) | ~7 MB/s |
-| `wget2` (HTTP/2 chunked) | ~4 MB/s |
+| aria2c (`-x 16 -s 16`) | ~8.2 MB/s |
+| `gofetch` (`-x 16`) | ~7.7 MB/s |
+| `gofetch` (`-x 8`) | ~7.4 MB/s |
+| `curl` (single stream) | ~3.2 MB/s |
 
-The honest summary: **gofetch beats aria2c's tuned `-x 16`** on a live
-high-latency connection and crushes single-stream tools by ~30-70× (aria2c's
-*default* is a single connection — `-x 16` must be passed explicitly).
-gofetch needs **zero tuning flags** to hit peak speed, uses sparse files
-(survives disk quotas where `fallocate` preallocation fails), and
-auto-verifies with `-h auto`.
+### The sparse-file measurement trap
+
+Every multi-connection downloader writes at offsets, so an interrupted
+transfer leaves a sparse file whose `st_size` (= `wc -c`) is the highest
+written offset — gofetch also truncates to full size up front. Measuring
+throughput with `wc -c` on an interrupted transfer inflates the number by
+the sparse gap (measured: 14.6× on the 12 s window above — a run reporting
+"109 MB/s" had actually written ~93 MB). Single-stream tools write
+sequentially, so their `wc -c` is honest. `du -B1` (allocated blocks) is
+honest for both — `scripts/bench_real.sh` measures that, and the table
+above is du-based. An earlier version of this table reported multi-connection
+numbers 14× too high.
+
+The honest summary: on real links, **multi-connection tools cluster at
+parity** (gofetch ≈ aria2c -x16; the winner varies with link state), and
+both reach ~2× single-stream throughput. gofetch's real advantages are
+robustness, not raw speed: **zero tuning flags** to reach peak parallel
+throughput, sparse files (survive disk quotas where `fallocate`
+preallocation fails), auto-verification with `-h auto`, and the
+integrity/resume machinery. On loopback the wall-time gap is real and
+large (~4.4× over aria2c -x16) — but that measures the tools' overhead,
+not the network.
 
 Speed comes from parallel ranges + auto-tuned workers/buffers/retries, not
 the write path: the `mmap(2)` and native `pwrite` writers both saturate real
-links (~13 MB/s throttled 1.5 GB ISO: identical wall time, ~7 MiB peak RSS)
-and the page cache on loopback. `mmap` is the default; `--no-mmap` covers
-filesystems where mapping misbehaves (NFS, FUSE, overcommit limits).
+links (identical wall time, ~7 MiB peak RSS) and the page cache on loopback.
+`mmap` is the default; `--no-mmap` covers filesystems where mapping
+misbehaves (NFS, FUSE, overcommit limits).
 
 ## CI/CD
 

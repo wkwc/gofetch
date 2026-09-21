@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 # Real-internet throughput comparison: gofetch vs aria2c vs wget2 vs curl
 # on the same large file for a fixed window. Every tool gets identical
-# wall time via timeout -s INT; throughput = bytes/window.
+# wall time via timeout -s INT; throughput = BYTES DOWNLOADED / window.
 #
 #   ./scripts/bench_real.sh                  # default 12s window, Arch ISO
 #   WINDOW=15 ./scripts/bench_real.sh https://example.com/big.iso
+#
+# MEASUREMENT NOTE: `wc -c` reports a file's LOGICAL size — and every
+# multi-connection downloader writes at offsets, so an interrupted file
+# is sparse with st_size = the highest written offset (gofetch also
+# truncates to full size up front). wc -c on an interrupted transfer
+# inflates throughput by the sparse gap (measured: 14.6x on a 12s
+# window). `du -B1` counts ALLOCATED blocks ≈ bytes actually written,
+# which is honest for both sparse and completed files — so that is what
+# this script measures.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit
@@ -18,7 +27,8 @@ trap 'rm -rf "$TMP"' EXIT
 echo "== building =="
 go build -o "$GOFETCH" ./cmd/gofetch
 
-# run_bw NAME -- CMD... : run CMD for WINDOW seconds, report MB/s.
+# run_bw NAME -- CMD... : run CMD for WINDOW seconds, report MB/s from
+# allocated (du) bytes — see the measurement note above.
 run_bw() {
   local name=$1; shift; [ "$1" = "--" ] && shift
   local out="$TMP/$name.bin"
@@ -27,8 +37,8 @@ run_bw() {
   timeout -s INT "$WINDOW" "$@" >/dev/null 2>&1
   t1=$(date +%s%N)
   ns=$((t1 - t0))
-  bytes=$(wc -c "$out" 2>/dev/null | awk '{print $1}')
-  printf '%-14s %6.1f MB/s  (%s bytes in %.1fs)\n' \
+  bytes=$(du -B1 "$out" 2>/dev/null | awk '{print $1}')
+  printf '%-14s %6.1f MB/s  (%s allocated bytes in %.1fs)\n' \
     "$name" "$(awk -v b="${bytes:-0}" -v n="$ns" 'BEGIN{print b/n*1e9/1048576}')" \
     "${bytes:-0}" "$(awk -v n="$ns" 'BEGIN{print n/1e9}')"
 }
