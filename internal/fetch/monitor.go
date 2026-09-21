@@ -11,6 +11,15 @@ const (
 	stealMinChunk    = 256 * 1024
 	stealSlowBytes   = 1 << 20
 	stealGracePeriod = 1500 * time.Millisecond
+	// stealEtaGate suppresses stealing when the download is moving and
+	// will finish within the gate: churn (cancelled connections,
+	// re-handshakes, re-fetch ramps) then costs more than it recovers.
+	// Measured on a shaped ~35 Mbps link: the tail of a 10 MB download
+	// showed a stolen range re-fetching at the wire's thinnest rate.
+	// Stalled workers (0 bytes) are never stolen anyway and self-recover
+	// via the idle-body timeout; below the gate the queue drains on its
+	// own because every worker is still moving.
+	stealEtaGate = 5 * time.Second
 )
 
 // monitor polls each worker. If a worker is on a large task but hasn't
@@ -24,9 +33,11 @@ const (
 // picking up the leftover will start from the recorded offset and
 // our own worker observes `cancelFn = nil` after the cancel returns,
 // preventing a second cancel from this monitor loop.
-func monitor(ctx context.Context, states []*workerState, queue *Queue) {
+func monitor(ctx context.Context, states []*workerState, queue *Queue, total int64) {
 	t := time.NewTicker(monitorInterval)
 	defer t.Stop()
+	var lastDone int64 = -1
+	var last time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -34,6 +45,28 @@ func monitor(ctx context.Context, states []*workerState, queue *Queue) {
 		case <-t.C:
 		}
 		now := time.Now()
+		// Aggregate-ETA gate: when the whole download is moving well and
+		// its ETA is under the gate, stealing only churns. rate <= 0
+		// (no aggregate progress this tick) falls through — a stalled
+		// download is exactly when stealing helps.
+		if total > 0 {
+			done := int64(0)
+			for _, ws := range states {
+				done += ws.bytesDone.Load()
+			}
+			if lastDone >= 0 {
+				if dt := now.Sub(last).Seconds(); dt > 0 {
+					if rate := float64(done-lastDone) / dt; rate > 0 {
+						eta := time.Duration(float64(total-done) / rate * float64(time.Second))
+						if eta < stealEtaGate {
+							lastDone, last = done, now
+							continue
+						}
+					}
+				}
+			}
+			lastDone, last = done, now
+		}
 		for _, ws := range states {
 			leftover, cancel, yes := ws.stealPlan(now)
 			if !yes {

@@ -457,3 +457,69 @@ func TestCheckRangeResponse(t *testing.T) {
 		})
 	}
 }
+
+// TestRetryBudgetMeasuresProgress pins the progress-aware retry budget:
+// requeues with new bytes between them never exhaust the budget (a
+// slow-but-alive link finishes, like curl's patience), while requeues
+// with NO progress exhaust at RetryMax and fail.
+func TestRetryBudgetMeasuresProgress(t *testing.T) {
+	t.Run("progress resets the budget", func(t *testing.T) {
+		d := NewDownloader("https://x.example/f", filepath.Join(t.TempDir(), "o.bin"), Options{Quiet: true})
+		d.autoConfig.RetryMax = 3
+		queue := NewQueue(0, 0)
+		ws := newWorkerState()
+		// 4 requeues, each with more bytes written than the last:
+		// a slow-but-progressing task must never fail.
+		for i := int64(1); i <= 4; i++ {
+			ws.reset(Task{Start: 0, End: 999})
+			ws.bytesDone.Store(i * 100)
+			d.requeueUnfinished(context.Background(), ws, Task{Start: 0, End: 999}, queue)
+			if _, bad := ws.err(); bad {
+				t.Fatalf("requeue %d with progress exhausted the budget: %v", i, ws.errVal.Load())
+			}
+		}
+	})
+
+	t.Run("no progress exhausts the budget", func(t *testing.T) {
+		d := NewDownloader("https://x.example/f", filepath.Join(t.TempDir(), "o.bin"), Options{Quiet: true})
+		d.autoConfig.RetryMax = 3
+		queue := NewQueue(0, 0)
+		ws := newWorkerState()
+		ws.reset(Task{Start: 0, End: 999})
+		for i := 0; i < 3; i++ {
+			d.requeueUnfinished(context.Background(), ws, Task{Start: 0, End: 999}, queue)
+			if _, bad := ws.err(); bad {
+				t.Fatalf("requeue %d (no progress yet) failed early: %v", i, ws.errVal.Load())
+			}
+		}
+		// 4th requeue with no new bytes: budget exhausted, clean failure.
+		ws.reset(Task{Start: 0, End: 999})
+		d.requeueUnfinished(context.Background(), ws, Task{Start: 0, End: 999}, queue)
+		err, ok := ws.err()
+		if !ok || !strings.Contains(err.Error(), "without progress") {
+			t.Fatalf("want exhaustion error, got %v", err)
+		}
+	})
+
+	t.Run("stall after progress still exhausts eventually", func(t *testing.T) {
+		d := NewDownloader("https://x.example/f", filepath.Join(t.TempDir(), "o.bin"), Options{Quiet: true})
+		d.autoConfig.RetryMax = 3
+		queue := NewQueue(0, 0)
+		ws := newWorkerState()
+		ws.reset(Task{Start: 0, End: 999})
+		ws.bytesDone.Store(500)
+		// First requeue has progress (0 → 500) — resets nothing yet (n=0),
+		// but records the progress watermark.
+		d.requeueUnfinished(context.Background(), ws, Task{Start: 0, End: 999}, queue)
+		// Three more requeues with NO new bytes: exhausts.
+		for i := 0; i < 3; i++ {
+			ws.reset(Task{Start: 0, End: 999})
+			ws.bytesDone.Store(500)
+			d.requeueUnfinished(context.Background(), ws, Task{Start: 0, End: 999}, queue)
+		}
+		err, ok := ws.err()
+		if !ok || !strings.Contains(err.Error(), "without progress") {
+			t.Fatalf("want exhaustion after no-progress requeues, got %v", err)
+		}
+	})
+}

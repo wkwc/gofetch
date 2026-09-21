@@ -7,11 +7,18 @@ import (
 )
 
 // newResumeTestDownloader builds a Downloader wired to a temp output file
-// with resume enabled, for exercising resolveResume in isolation.
+// with resume enabled, for exercising resolveResume in isolation. The
+// output file is created at 1000 bytes (the total every test here uses):
+// real resume flows always have the partial file on disk, and
+// resolveResume's stale-sidecar guard requires it.
 func newResumeTestDownloader(t *testing.T) *Downloader {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "f.bin")
-	return NewDownloader("https://primary.example/f.bin", out, Options{})
+	d := NewDownloader("https://primary.example/f.bin", out, Options{})
+	if err := os.WriteFile(out, make([]byte, 1000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 
 // TestResolveResumeDisabled verifies --no-resume never seeds ranges.

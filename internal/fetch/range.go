@@ -168,7 +168,7 @@ func (d *Downloader) rangeDownload(ctx context.Context, url string, total int64,
 		monitorWG.Add(1)
 		go func() {
 			defer monitorWG.Done()
-			monitor(monitorCtx, states, queue)
+			monitor(monitorCtx, states, queue, total)
 		}()
 	} else {
 		d.vlog("rate limited: work-stealing monitor disabled")

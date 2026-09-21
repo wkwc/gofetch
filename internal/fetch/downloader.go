@@ -57,6 +57,9 @@ type Downloader struct {
 	lastResumeSave   time.Time
 	retryMu          sync.Mutex
 	retryCount       map[Task]int
+	// retryProgress tracks bytes written per task at its last requeue,
+	// so the retry budget measures lack of progress, not slowness.
+	retryProgress map[Task]int64
 
 	// completed accumulates finished ranges for resume sidecars.
 	// Seeded from loadResume; updated on every successful task so
@@ -284,6 +287,7 @@ func (d *Downloader) Download(ctx context.Context) error {
 func (d *Downloader) resetRetryBudget() {
 	d.retryMu.Lock()
 	d.retryCount = nil
+	d.retryProgress = nil
 	d.retryMu.Unlock()
 }
 
@@ -377,6 +381,19 @@ func (d *Downloader) applyProbe(info probeInfo) {
 // the accumulator as a side effect. Returns nil when resume is disabled.
 func (d *Downloader) resolveResume(activeURL string, total int64) []Task {
 	if !d.resumeEnabled {
+		return nil
+	}
+	// Stale-sidecar guard: sidecar (and in-memory) claims are only
+	// trustworthy together with the partial output file they describe.
+	// If the output file is missing, or exists at a size other than the
+	// download's total, its bytes are gone (deleted, lost, truncated) —
+	// every claim is stale and the download must start fresh, never
+	// skip ranges. (Observed live: a stale sidecar whose file had been
+	// deleted produced a 97.6%-hole file reported as success.)
+	if info, err := os.Stat(d.outFile); err != nil || (total > 0 && info.Size() != total) {
+		d.vlog("output file missing or wrong size; discarding stale resume claims")
+		_ = clearResume(d.resumePath)
+		d.seedCompleted(nil)
 		return nil
 	}
 	st, err := loadResume(d.resumePath, activeURL, total)

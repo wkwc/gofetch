@@ -133,7 +133,7 @@ but "parallel curl."
 
 ## Error Handling
 
-- **Transient network errors** (connection reset, unexpected EOF, timeout) are retried with exponential backoff (up to 10 retries per chunk).
+- **Transient network errors** (connection reset, unexpected EOF, timeout) are retried with exponential backoff. Retries measure lack of progress, not slowness: a chunk that keeps writing bytes between retries is on a slow-but-alive link and never exhausts the budget; only repeated no-progress requeues (default 10) fail the chunk.
 - **HTTP 429/503/502/504/408** are retried respecting `Retry-After` header.
 - **Permanent errors** (invalid URL, unsupported status codes) fail immediately.
 - **HTTP 416** (Range Not Satisfiable) is a hard error for the range (not treated as complete); the worker fails that task rather than marking unwritten bytes done.
@@ -198,6 +198,11 @@ On first run, a sidecar file `<output>.gofetch.resume` records completed byte
 ranges (deduplicated and merged, so it stays compact across abort/resume
 cycles). If the process is killed or crashes, re-run the same command: it
 skips completed ranges and continues where it left off.
+
+A sidecar is only trusted together with its partial output file: if the
+file is missing or its size no longer matches the download, the claims are
+stale (the bytes are gone) and gofetch re-fetches everything rather than
+produce a hole-ridden file.
 
 ## Project Layout
 

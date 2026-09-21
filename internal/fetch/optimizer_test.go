@@ -81,8 +81,19 @@ func TestScaleWorkers(t *testing.T) {
 	if w := scaleWorkers(100, cores); w != 4 {
 		t.Errorf("scaleWorkers(100B) = %d, want 4", w)
 	}
-	if w := scaleWorkers(64<<20, cores); w < 4 || w > cores*2 {
-		t.Errorf("scaleWorkers(64MiB) = %d, want 4-%d", w, cores*2)
+	// Small files floor at 4 regardless of core count: the old
+	// cores/2-relative floor over-parallelized small downloads on
+	// many-core boxes (measured worst-point on a shaped link).
+	for _, cores := range []int{1, 2, 8, 16, 64} {
+		if w := scaleWorkers(10<<20, cores); w != 4 {
+			t.Errorf("scaleWorkers(10MiB, %d cores) = %d, want 4", cores, w)
+		}
+	}
+	if w := scaleWorkers(64<<20, cores); w < 4 || w > 32 {
+		t.Errorf("scaleWorkers(64MiB) = %d, want 4-32", w)
+	}
+	if w := scaleWorkers(1<<40, cores); w != 32 {
+		t.Errorf("scaleWorkers(1TiB) = %d, want 32 (cap)", w)
 	}
 }
 

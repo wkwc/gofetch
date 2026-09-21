@@ -212,7 +212,8 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 	// Commit the written prefix first so crash/resume skips it even if
 	// the remainder never makes it back onto the queue.
 	d.recordWrittenPrefix(ws, task)
-	remaining := Task{Start: task.Start + ws.bytesDone.Load(), End: task.End}
+	written := ws.bytesDone.Load()
+	remaining := Task{Start: task.Start + written, End: task.End}
 	if remaining.Start > remaining.End {
 		return
 	}
@@ -222,10 +223,24 @@ func (d *Downloader) requeueUnfinished(ctx context.Context, ws *workerState, tas
 	if d.retryCount == nil {
 		d.retryCount = make(map[Task]int)
 	}
+	if d.retryProgress == nil {
+		d.retryProgress = make(map[Task]int64)
+	}
 	n := d.retryCount[task]
+	// Retries measure LACK of progress, not slowness: a task that wrote
+	// bytes since its last requeue is on a slow-but-alive link, not a
+	// dead one — burning the budget there fails downloads that curl's
+	// patience would finish (observed live: a stalling-but-progressing
+	// 100 MB task exhausted 10 retries and failed where a single
+	// patient stream succeeded). Only a requeue with NO new bytes
+	// counts toward the budget, so a dead task still exhausts.
+	if prev, ok := d.retryProgress[task]; ok && written > prev && n > 0 {
+		n = 0
+	}
+	d.retryProgress[task] = written
 	if d.autoConfig.RetryMax > 0 && n >= d.autoConfig.RetryMax {
 		d.retryMu.Unlock()
-		ws.setErr(fmt.Errorf("task %d-%d retried %d times", remaining.Start, remaining.End, n))
+		ws.setErr(fmt.Errorf("task %d-%d retried %d times without progress", remaining.Start, remaining.End, n))
 		return
 	}
 	d.retryCount[task] = n + 1

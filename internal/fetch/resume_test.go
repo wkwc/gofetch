@@ -1,10 +1,12 @@
 package fetch
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestResumeStateRoundTrip(t *testing.T) {
@@ -528,6 +530,11 @@ func TestResolveResumeCrossMirrorSpliceGuard(t *testing.T) {
 
 	t.Run("discards without manifest", func(t *testing.T) {
 		d := NewDownloader("http://primary.example/file.bin", filepath.Join(dir, "a.bin"), Options{})
+		// The partial file exists at the download's size (real failover
+		// flow) — resolveResume's stale-sidecar guard requires it.
+		if err := os.WriteFile(filepath.Join(dir, "a.bin"), make([]byte, 1000), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		d.seedCompleted([]Task{{Start: 0, End: 999}})
 		if n := len(d.snapshotCompleted()); n != 1 {
 			t.Fatalf("precondition: %d completed ranges, want 1", n)
@@ -544,6 +551,9 @@ func TestResolveResumeCrossMirrorSpliceGuard(t *testing.T) {
 
 	t.Run("reuses with manifest", func(t *testing.T) {
 		d := NewDownloader("http://primary.example/file.bin", filepath.Join(dir, "b.bin"), Options{})
+		if err := os.WriteFile(filepath.Join(dir, "b.bin"), make([]byte, 1000), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		d.manifest = &Manifest{Version: ManifestVersion, Algo: "sha256"}
 		d.seedCompleted([]Task{{Start: 0, End: 999}})
 		completed := d.resolveResume("http://mirror.example/file.bin", 1000)
@@ -551,4 +561,85 @@ func TestResolveResumeCrossMirrorSpliceGuard(t *testing.T) {
 			t.Fatalf("expected manifest-vouched reuse, got %v", completed)
 		}
 	})
+}
+
+// TestResumeSidecarWithoutFileIsIgnored pins the stale-sidecar guard:
+// a sidecar claiming completed ranges is only trustworthy together with
+// its partial output file. If the file is missing (deleted, lost), the
+// claims are stale — the download must re-fetch everything, never
+// "succeed" with a hole-ridden file (observed live: a stale sidecar
+// produced a 97.6%-hole file with exit 0).
+func TestResumeSidecarWithoutFileIsIgnored(t *testing.T) {
+	payload := makePayload(2 << 20)
+	srv := newRangeServer(t, payload, nil)
+	out := filepath.Join(t.TempDir(), "out.bin")
+	// Simulate a prior run: sidecar claims the whole file complete…
+	st := &ResumeState{
+		URL: srv.URL, OutFile: out, TotalSize: int64(len(payload)),
+		Completed: []Task{{Start: 0, End: int64(len(payload)) - 1}},
+	}
+	data, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resumePath(out), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// …but the output file itself is gone (deleted by the user/lost).
+	// (No file is created here: resumePath(out) exists, out does not.)
+
+	d := NewDownloader(srv.URL, out, Options{Quiet: true})
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		nonzero := 0
+		for _, b := range got {
+			if b != 0 {
+				nonzero++
+			}
+		}
+		t.Fatalf("stale sidecar produced holes: %d/%d bytes written (want full file)", nonzero, len(payload))
+	}
+}
+
+// TestResumeSidecarWrongSizeFileIsIgnored: a sidecar beside a file at
+// the wrong size describes bytes that are gone (the file will be
+// truncated) — the download must re-fetch everything.
+func TestResumeSidecarWrongSizeFileIsIgnored(t *testing.T) {
+	payload := makePayload(2 << 20)
+	srv := newRangeServer(t, payload, nil)
+	out := filepath.Join(t.TempDir(), "out.bin")
+	st := &ResumeState{
+		URL: srv.URL, OutFile: out, TotalSize: int64(len(payload)),
+		Completed: []Task{{Start: 0, End: int64(len(payload)) - 1}},
+	}
+	data, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resumePath(out), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// File exists but at the wrong size (half) — its claimed ranges
+	// point past the truncated body.
+	if err := os.WriteFile(out, make([]byte, 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := NewDownloader(srv.URL, out, Options{Quiet: true})
+	if err := d.Download(testCtx(t, 30*time.Second)); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("wrong-size sidecar produced holes: got %d bytes, want %d", len(got), len(payload))
+	}
 }
