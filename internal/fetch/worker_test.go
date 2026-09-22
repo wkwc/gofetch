@@ -434,6 +434,7 @@ func TestCheckRangeResponse(t *testing.T) {
 		wantErr string
 	}{
 		{"exact match", "identity", "bytes 100-199/1000", ""},
+		{"size changed mid-download", "identity", "bytes 100-199/5000", "size changed"},
 		{"no encoding header", "", "bytes 100-199/1000", ""},
 		{"gzip rejected", "gzip", "bytes 100-199/1000", "Content-Encoding"},
 		{"br rejected", "br", "bytes 100-199/1000", "Content-Encoding"},
@@ -444,7 +445,7 @@ func TestCheckRangeResponse(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkRangeResponse(hdr(tt.enc, tt.cr), task)
+			err := checkRangeResponse(hdr(tt.enc, tt.cr), task, 1000)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("want nil, got %v", err)

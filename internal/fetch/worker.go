@@ -336,7 +336,7 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 		// still sends Content-Encoding we reject rather than corrupt the file.
 		// Content-Range must match the requested task so a CDN cannot hand
 		// us a different slice written at task.Start.
-		if err := checkRangeResponse(resp.Header, task); err != nil {
+		if err := checkRangeResponse(resp.Header, task, d.totalSize); err != nil {
 			drainAndClose(resp.Body)
 			return err
 		}
@@ -351,12 +351,17 @@ func (d *Downloader) runTask(ctx context.Context, url string, ws *workerState, t
 }
 
 // checkRangeResponse validates 206 headers for task before the body is
-// pumped: compressed bodies would desync Range past-the-end math, and a
+// pumped: compressed bodies would desync Range past-the-end math, a
 // Content-Range that doesn't match the requested task means a CDN (or
 // proxy) handed us a different slice than the one we'd write at
-// task.Start. Takes only the header (that's all it inspects), so tests
-// need no response bodies. The caller drains the body on error.
-func checkRangeResponse(h http.Header, task Task) error {
+// task.Start, and a Content-Range total that differs from the probed
+// size means the server's view of the file changed mid-download — the
+// transferred bytes could be a mix of old and new content (integrity
+// threat; observed live: a CDN edge served a truncated probe response).
+// wantTotal <= 0 (unknown size) skips the total check. Takes only the
+// header (that's all it inspects), so tests need no response bodies.
+// The caller drains the body on error.
+func checkRangeResponse(h http.Header, task Task, wantTotal int64) error {
 	if enc := h.Get("Content-Encoding"); !isIdentity(enc) {
 		return fmt.Errorf("range %d-%d: unexpected Content-Encoding %q", task.Start, task.End, enc)
 	}
@@ -364,9 +369,13 @@ func checkRangeResponse(h http.Header, task Task) error {
 	if cr == "" {
 		return fmt.Errorf("range %d-%d: 206 missing Content-Range", task.Start, task.End)
 	}
-	start, end, _, ok := parseContentRange(cr)
+	start, end, total, ok := parseContentRange(cr)
 	if !ok || start != task.Start || end != task.End {
 		return fmt.Errorf("range %d-%d: Content-Range mismatch %q", task.Start, task.End, cr)
+	}
+	if wantTotal > 0 && total > 0 && total != wantTotal {
+		return fmt.Errorf("range %d-%d: file size changed mid-download (Content-Range total %d, probed %d)",
+			task.Start, task.End, total, wantTotal)
 	}
 	return nil
 }
